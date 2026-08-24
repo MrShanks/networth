@@ -1,0 +1,137 @@
+{{define "expenses.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Expenses</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Expenses</h1>
+  <nav>
+    <a href="/">Net worth</a>
+    <a class="current" href="/expenses">Expenses</a>
+    <a href="/records">Records</a>
+    <a href="/retire">Retirement</a>
+  </nav>
+  <p class="sub">Monthly spending, totalled in {{.Base}} at the current rate.</p>
+</header>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+
+<section class="cards">
+  <div class="card">
+    <span class="label">{{monthName .Month.Month}}</span>
+    <strong class="value">{{.Month.Total}} {{.Base}}</strong>
+    {{if not .Known}}<span class="empty small">nothing recorded yet</span>{{end}}
+  </div>
+  <div class="card">
+    <span class="label">Monthly average</span>
+    <strong class="value">{{.Report.Average}} {{.Base}}</strong>
+    <span class="empty small">over {{len .Report.Months}} month(s)</span>
+  </div>
+  <div class="card">
+    <span class="label">Recorded in total</span>
+    <strong class="value">{{.Report.Total}} {{.Base}}</strong>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Per month</h2>
+  {{if .Bars.Empty}}
+    <p class="empty">Record an expense to see the trend.</p>
+  {{else}}
+    <svg class="chart" viewBox="0 0 {{.Bars.Width}} {{.Bars.Height}}" role="img" aria-label="Spending per month">
+      {{range .Bars.YTicks}}
+        <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Bars.Width}}" y2="{{.Y}}"/>
+        <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+      {{end}}
+      {{range .Bars.Bars}}
+        <a href="/expenses?month={{.Label}}">
+          <rect class="bar{{if .Current}} current{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="3">
+            <title>{{.Title}}</title>
+          </rect>
+          <text class="tick" x="{{.X}}" y="{{$.Bars.Height}}" dx="{{.W}}" dy="-4" text-anchor="middle">{{.Label}}</text>
+        </a>
+      {{end}}
+    </svg>
+  {{end}}
+</section>
+
+<div class="grid">
+  <section class="panel">
+    <h2>Add an expense</h2>
+    <form method="post" action="/expenses" class="stack">
+      <label>Amount
+        <input type="text" name="amount" inputmode="decimal" placeholder="42.90" required>
+      </label>
+      <label>Currency
+        <select name="currency">
+          {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label>Category
+        <input type="text" name="new_category" list="categories" placeholder="Groceries" required maxlength="40">
+        <datalist id="categories">
+          {{range .Categories}}<option value="{{.}}"></option>{{end}}
+        </datalist>
+      </label>
+      <label>Note
+        <input type="text" name="note" placeholder="optional" maxlength="120">
+      </label>
+      <label>Date
+        <input type="date" name="as_of" value="{{.Today}}" required>
+      </label>
+      <button type="submit">Add expense</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>{{monthName .Month.Month}} by category</h2>
+    {{if .Month.Categories}}
+      <table>
+        <tbody>
+        {{range .Month.Categories}}
+          <tr>
+            <td>{{.Category}}</td>
+            <td class="barcell"><span class="share" style="width: {{printf "%.0f" .Share}}%"></span></td>
+            <td class="num">{{.Total}}</td>
+            <td class="num empty small">{{printf "%.0f" .Share}}%</td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty">Nothing recorded for this month.</p>
+    {{end}}
+  </section>
+</div>
+
+<section class="panel">
+  <h2>{{monthName .Month.Month}} entries</h2>
+  {{if .Month.Expenses}}
+    <table>
+      <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead>
+      <tbody>
+      {{range .Month.Expenses}}
+        <tr>
+          <td>{{.AsOf}}</td>
+          <td><span class="pill cur">{{.Category}}</span></td>
+          <td class="empty">{{.Note}}</td>
+          <td class="num">{{.Amount}} {{.Currency}}</td>
+          <td class="num">
+            <form method="post" action="/expenses/{{.ID}}/delete">
+              <button class="link danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty">No expenses recorded for this month.</p>
+  {{end}}
+</section>
+</body>
+</html>{{end}}

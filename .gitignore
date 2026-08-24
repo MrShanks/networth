@@ -27,6 +27,10 @@ go.work.sum
 # env file
 .env
 
+# Local database
+networth.db
+networth.db-*
+
 # Editor/IDE
 # .idea/
 # .vscode/

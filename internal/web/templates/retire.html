@@ -1,0 +1,135 @@
+{{define "retire.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retirement</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Retirement</h1>
+  <nav>
+    <a href="/">Net worth</a>
+    <a href="/expenses">Expenses</a>
+    <a href="/records">Records</a>
+    <a class="current" href="/retire">Retirement</a>
+  </nav>
+  <p class="sub">How long until your portfolio can cover your spending. Amounts are in
+    today's {{.Base}}, so inflation is already taken out.</p>
+</header>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{if not .HasExpense}}
+  <p class="alert warn">No expenses recorded yet, so there is nothing to base the target on —
+    <a href="/expenses">add some</a> first.</p>
+{{end}}
+
+<section class="cards">
+  <div class="card">
+    <span class="label">Time to go</span>
+    {{if not .Plan.Reachable}}
+      <strong class="value down">out of reach</strong>
+      <span class="delta down">saving more, or a higher return, is needed</span>
+    {{else if eq .Plan.Months 0}}
+      <strong class="value up">you can retire now</strong>
+      <span class="delta up">your portfolio already covers your spending</span>
+    {{else}}
+      <strong class="value">{{.Plan.Years}}y {{.Plan.RemainingMonths}}m</strong>
+      <span class="delta up">on track for {{monthName .Plan.Date}}</span>
+    {{end}}
+  </div>
+  <div class="card">
+    <span class="label">Target portfolio</span>
+    <strong class="value">{{.Plan.Target}} {{.Base}}</strong>
+    <span class="empty small">{{.Plan.AnnualExpenses}} a year at {{printf "%.1f" .Plan.WithdrawalPct}}%</span>
+  </div>
+  <div class="card">
+    <span class="label">Monthly expenses</span>
+    <strong class="value">{{.Plan.MonthlyExpenses}} {{.Base}}</strong>
+    <span class="empty small">average of your last {{.AvgMonths}} recorded month(s)</span>
+  </div>
+  <div class="card">
+    <span class="label">Today</span>
+    <strong class="value">{{.Plan.NetWorth}} {{.Base}}</strong>
+    <span class="empty small">{{printf "%.1f" .Plan.Progress}}% of the target,
+      {{.Plan.Shortfall}} to go</span>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Projection</h2>
+  {{if .Chart.Empty}}
+    <p class="empty">Fill in the assumptions below to see a projection.</p>
+  {{else}}
+    {{template "linechart" .Chart}}
+    <p class="empty small">
+      <span class="key value"></span> projected portfolio
+      <span class="key invested"></span> target &mdash; where they meet, you can stop working.
+      Growth is {{printf "%.1f" .Plan.RealReturnPct}}% a year after inflation.
+    </p>
+  {{end}}
+</section>
+
+<section class="panel">
+  <h2>How long the money lasts</h2>
+  {{if .BurnChart.Empty}}
+    <p class="empty">Record a balance and some expenses to see this.</p>
+  {{else}}
+    {{template "linechart" .BurnChart}}
+    <table class="ranking">
+      <tbody>
+      {{range .Runway.Scenarios}}
+        <tr>
+          <td>
+            <span class="key {{.Class}}"></span> {{.Name}}
+            <div class="empty small">{{.Note}}</div>
+          </td>
+          <td class="num">
+            {{if .Forever}}
+              <span class="up">never runs out</span>
+            {{else}}
+              {{.Years}}y {{.RemainingMonths}}m
+            {{end}}
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+</section>
+
+<section class="panel">
+  <h2>Assumptions</h2>
+  <form method="get" action="/retire" class="assumptions">
+    <label>Monthly savings
+      <input type="text" name="savings" inputmode="decimal" value="{{.Plan.MonthlySavings.Input}}">
+      <small class="empty">what you put aside each month, assumed to keep pace with inflation</small>
+    </label>
+    <label>Annual return %
+      <input type="text" name="return" inputmode="decimal" value="{{printf "%.1f" .Plan.ReturnPct}}">
+      <small class="empty">before inflation, 7% is a common estimate for stocks</small>
+    </label>
+    <label>Inflation %
+      <input type="text" name="inflation" inputmode="decimal" value="{{printf "%.1f" .Plan.InflationPct}}">
+      <small class="empty">leaves {{printf "%.1f" .Plan.RealReturnPct}}% of real growth</small>
+    </label>
+    <label>Withdrawal rate %
+      <input type="text" name="withdrawal" inputmode="decimal" value="{{printf "%.1f" .Plan.WithdrawalPct}}">
+      <small class="empty">4% means a portfolio of 25x your yearly spending</small>
+    </label>
+    <label>Passion project income
+      <input type="text" name="passion" inputmode="decimal" value="{{.Passion.Input}}">
+      <small class="empty">what you would still earn each month after stopping</small>
+    </label>
+    <label>Months worked in scenario 2
+      <input type="text" name="work" inputmode="numeric" value="{{.WorkMonths}}">
+      <small class="empty">how much longer you keep saving before stopping</small>
+    </label>
+    <button type="submit">Recalculate</button>
+  </form>
+  <p class="empty small">Monthly expenses come from your last 12 recorded months and are
+    not editable here — <a href="/expenses">record expenses</a> to change them.</p>
+</section>
+</body>
+</html>{{end}}

@@ -1,0 +1,386 @@
+{{define "linechart"}}
+  <svg class="chart" viewBox="0 0 {{.Width}} {{.Height}}" role="img">
+    {{range .YTicks}}
+      <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Width}}" y2="{{.Y}}"/>
+      <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+    {{end}}
+    <polygon class="area" points="{{.Area}}"/>
+    <polyline class="line" points="{{.Line}}"/>
+    {{range .Extra}}<polyline class="line {{.Class}}" points="{{.Points}}"/>{{end}}
+    {{range .Dots}}
+      <circle class="dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+    {{end}}
+    {{range .XTicks}}
+      <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
+    {{end}}
+  </svg>
+{{end}}
+
+{{define "widgethead"}}
+  <header class="widget-head">
+    <h2>{{.}}</h2>
+    <div class="widget-tools">
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+{{end}}
+
+{{define "dashboard.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Net Worth</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Net Worth</h1>
+  <nav>
+    <a class="current" href="/">Net worth</a>
+    <a href="/expenses">Expenses</a>
+    <a href="/records">Records</a>
+    <a href="/retire">Retirement</a>
+  </nav>
+  <p class="sub">
+    Everything is reported in {{.Base}}, converted at the current rate.
+    <button type="button" class="link" id="reset-layout">Reset layout</button>
+  </p>
+</header>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .MissingRates}}
+  <p class="alert warn">No exchange rate available for {{range $i, $c := .}}{{if $i}}, {{end}}{{$c}}{{end}} —
+    those amounts are counted 1:1 for now.</p>
+{{end}}
+
+<div class="board" id="board">
+
+  <section class="widget" data-widget="summary" data-span="2">
+    {{template "widgethead" "Summary"}}
+    <div class="widget-body">
+      <div class="cards">
+        <div class="card">
+          <span class="label">Net worth</span>
+          <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}} {{.Base}}</strong>
+          {{if .HasChange}}
+            <span class="delta {{if lt .Change 0}}down{{else}}up{{end}}">
+              {{if ge .Change 0}}+{{end}}{{.Change}} since last entry
+            </span>
+          {{end}}
+        </div>
+        <div class="card">
+          <span class="label">Assets</span>
+          <strong class="value up">{{.Now.Assets}} {{.Base}}</strong>
+        </div>
+        <div class="card">
+          <span class="label">Liabilities</span>
+          <strong class="value down">{{.Now.Liabilities}} {{.Base}}</strong>
+        </div>
+        {{if .Now.Positions}}
+        <div class="card">
+          <span class="label">Funds</span>
+          <strong class="value">{{.Now.MarketBase}} {{.Base}}</strong>
+          <span class="delta {{if lt .Now.GainBase 0}}down{{else}}up{{end}}">
+            {{if ge .Now.GainBase 0}}+{{end}}{{.Now.GainBase}} ({{printf "%+.1f" .Now.GainPct}}%)
+            on {{.Now.InvestedBase}} invested
+          </span>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  <section class="widget" data-widget="rates" data-span="2">
+    {{template "widgethead" "Exchange rates"}}
+    <div class="widget-body">
+      <div class="quotes" id="quotes">
+        {{range .FX.Pairs}}
+          <div class="quote"><span class="label">{{.Name}}</span><strong>{{.Value}}</strong></div>
+        {{else}}
+          <div class="quote"><span class="empty">exchange rates unavailable</span></div>
+        {{end}}
+      </div>
+      <p class="empty small" id="quotes-meta">
+        {{if .FX.Live}}live &middot; {{end}}ECB reference rates of {{.FX.AsOf}}
+        &middot; checked {{.FX.Checked}}{{with .FX.Note}} &middot; {{.}}{{end}}
+      </p>
+    </div>
+  </section>
+
+  <section class="widget" data-widget="chart-networth" data-span="2">
+    {{template "widgethead" "Net worth over time"}}
+    <div class="widget-body">
+      {{if .Chart.Empty}}
+        <p class="empty">Add an account and record a balance to see your trend.</p>
+      {{else}}
+        {{template "linechart" .Chart}}
+      {{end}}
+    </div>
+  </section>
+
+  {{if not .InvestChart.Empty}}
+  <section class="widget" data-widget="chart-funds" data-span="2">
+    {{template "widgethead" "Funds: value vs invested"}}
+    <div class="widget-body">
+      {{template "linechart" .InvestChart}}
+      <p class="empty small">
+        <span class="key value"></span> market value
+        <span class="key invested"></span> money paid in — a step up means you bought more,
+        the gap between the lines is your growth.
+      </p>
+    </div>
+  </section>
+  {{end}}
+
+  <section class="widget" data-widget="funds" data-span="1">
+    {{template "widgethead" "Funds"}}
+    <div class="widget-body">
+      <h3>Update a fund</h3>
+      {{if .Funds}}
+        <form method="post" action="/fund-updates" class="stack">
+          <label>Fund
+            <select name="fund_id" required>
+              {{range .Funds}}
+                <option value="{{.ID}}">{{.AccountName}} · {{.Name}} ({{.Currency}})</option>
+              {{end}}
+            </select>
+          </label>
+          <label>Price per unit
+            <input type="text" name="price" inputmode="decimal" placeholder="87.40" required>
+          </label>
+          <label>Units traded
+            <input type="text" name="units" inputmode="decimal" placeholder="leave empty">
+            <small class="empty">only when you bought or sold: 12.5 to buy, -4 to sell,
+              at the price above</small>
+          </label>
+          <label>Date
+            <input type="date" name="as_of" value="{{.Today}}" required>
+          </label>
+          <button type="submit">Save</button>
+        </form>
+      {{else}}
+        <p class="empty">Add a fund below first.</p>
+      {{end}}
+
+      <h3>Add a fund</h3>
+      {{if .Accounts}}
+        <form method="post" action="/funds" class="stack">
+          <label>Held in
+            <select name="account_id" required>
+              {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+            </select>
+          </label>
+          <label>Name
+            <input type="text" name="name" placeholder="FTSE All-World" required maxlength="80">
+          </label>
+          <label>Ticker
+            <input type="text" name="ticker" placeholder="VWCE" maxlength="12">
+          </label>
+          <label>Currency
+            <select name="currency">
+              {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          </label>
+          <button type="submit">Add fund</button>
+        </form>
+      {{else}}
+        <p class="empty">Create an account first.</p>
+      {{end}}
+    </div>
+  </section>
+
+  <section class="widget" data-widget="accounts" data-span="1">
+    {{template "widgethead" "Accounts"}}
+    <div class="widget-body">
+      <h3>Record a cash balance</h3>
+      {{if .Accounts}}
+        <form method="post" action="/balances" class="stack">
+          <label>Account
+            <select name="account_id" required>
+              {{range .Accounts}}<option value="{{.ID}}">{{.Name}} ({{.Currency}})</option>{{end}}
+            </select>
+          </label>
+          <label>Amount (account currency)
+            <input type="text" name="amount" inputmode="decimal" placeholder="1234.56" required>
+          </label>
+          <label>Date
+            <input type="date" name="as_of" value="{{.Today}}" required>
+          </label>
+          <button type="submit">Save balance</button>
+        </form>
+      {{else}}
+        <p class="empty">Create an account below first.</p>
+      {{end}}
+
+      <h3>Add an account</h3>
+      <form method="post" action="/accounts" class="stack">
+        <label>Name
+          <input type="text" name="name" placeholder="Degiro" required maxlength="80">
+        </label>
+        <label>Type
+          <select name="kind">
+            <option value="asset">Asset</option>
+            <option value="liability">Liability</option>
+          </select>
+        </label>
+        <label>Cash currency
+          <select name="currency">
+            {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <button type="submit">Add account</button>
+      </form>
+    </div>
+  </section>
+
+  {{range .Now.Accounts}}
+  <section class="widget" data-widget="account-{{.ID}}" data-span="2">
+    <header class="widget-head">
+      <h2>
+        {{.Name}}
+        <span class="pill {{.Kind}}">{{.Kind}}</span>
+        <span class="pill cur">{{.Currency}}</span>
+      </h2>
+      <div class="widget-tools">
+        <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+        <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+      </div>
+    </header>
+    <div class="widget-body">
+      <div class="row">
+        <div>
+          <span class="label">Cash</span>
+          <strong>{{.Cash}} {{.Currency}}</strong>
+          {{if .CashAsOf}}<span class="empty small">as of {{.CashAsOf}}</span>
+          {{else}}<span class="empty small">no balance recorded</span>{{end}}
+        </div>
+        <div>
+          <span class="label">Account total</span>
+          <strong>{{.ValueBase}} {{$.Base}}</strong>
+        </div>
+        <form method="post" action="/accounts/{{.ID}}/delete"
+              onsubmit="return confirm('Delete {{.Name}} with all its funds and history?')">
+          <button class="link danger" type="submit">Delete account</button>
+        </form>
+      </div>
+
+      {{if .HasFunds}}
+        <table>
+          <thead>
+            <tr>
+              <th>Fund</th><th class="num">Units</th><th class="num">Price</th>
+              <th class="num">Avg cost</th><th class="num">Value</th><th class="num">Invested</th>
+              <th class="num">Gain</th><th>Trend</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {{range .Positions}}
+            <tr>
+              <td>
+                {{.Name}}
+                {{with .Ticker}}<span class="pill etf">{{.}}</span>{{end}}
+                <div class="empty small">as of {{.AsOf}}</div>
+              </td>
+              <td class="num">{{printf "%.4g" .Units}}</td>
+              <td class="num">{{.Price}} {{.Currency}}</td>
+              <td class="num">{{.AvgCost}} {{.Currency}}</td>
+              <td class="num">
+                {{.Value}} {{.Currency}}
+                {{if ne .Currency $.Base}}<div class="empty small">{{.ValueBase}} {{$.Base}}</div>{{end}}
+              </td>
+              <td class="num">{{.Invested}} {{.Currency}}</td>
+              <td class="num {{if lt .Gain 0}}down{{else}}up{{end}}">
+                {{if ge .Gain 0}}+{{end}}{{.Gain}}
+                <div class="small">{{printf "%+.1f" .GainPct}}%</div>
+              </td>
+              <td>
+                {{with spark .History}}
+                  <svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
+                    <polyline points="{{.}}"/>
+                  </svg>
+                {{else}}<span class="empty small">one entry</span>{{end}}
+              </td>
+              <td class="num">
+                <form method="post" action="/funds/{{.ID}}/delete"
+                      onsubmit="return confirm('Delete {{.Name}} and its history?')">
+                  <button class="link danger" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      {{end}}
+    </div>
+  </section>
+  {{else}}
+  <section class="widget" data-widget="empty" data-span="2">
+    {{template "widgethead" "Getting started"}}
+    <div class="widget-body">
+      <p class="empty">No accounts yet. Create one in the Accounts widget — for example a
+        broker such as Degiro, then add each of its ETFs as a fund.</p>
+    </div>
+  </section>
+  {{end}}
+
+  <section class="widget" data-widget="entries" data-span="2">
+    {{template "widgethead" "Recent entries"}}
+    <div class="widget-body">
+      {{if .Entries}}
+        <table>
+          <thead><tr><th>Date</th><th>What</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
+          <tbody>
+          {{range .Entries}}
+            <tr>
+              <td>{{.AsOf}}</td>
+              <td><span class="pill {{.Kind}}">{{.Kind}}</span></td>
+              <td>{{.Name}}</td>
+              <td class="num">
+                {{.Amount}} {{.Currency}}
+                {{if .Units}}<div class="empty small">{{printf "%.4g" .Units}} &times; {{.Price}}</div>{{end}}
+              </td>
+              <td class="num">
+                <form method="post" action="{{.Path}}/{{.ID}}/delete">
+                  <button class="link danger" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      {{else}}
+        <p class="empty">No entries yet.</p>
+      {{end}}
+    </div>
+  </section>
+
+</div>
+
+<script src="/static/board.js"></script>
+<script>
+  // Keep the currency ticker fresh without reloading the page.
+  async function refreshQuotes() {
+    try {
+      const res = await fetch('/api/rates', {headers: {'Accept': 'application/json'}});
+      if (!res.ok) return;
+      const data = await res.json();
+      const quotes = document.getElementById('quotes');
+      quotes.replaceChildren(...(data.pairs || []).map(p => {
+        const el = document.createElement('div');
+        el.className = 'quote';
+        el.innerHTML = '<span class="label"></span><strong></strong>';
+        el.querySelector('.label').textContent = p.name;
+        el.querySelector('strong').textContent = p.value;
+        return el;
+      }));
+      const meta = [data.live ? 'live' : '', 'ECB reference rates of ' + data.asOf,
+                    'checked ' + data.checked, data.note || ''].filter(Boolean);
+      document.getElementById('quotes-meta').textContent = meta.join(' \u00b7 ');
+    } catch (e) { /* offline: keep showing the last values */ }
+  }
+  setInterval(refreshQuotes, 60000);
+</script>
+</body>
+</html>{{end}}

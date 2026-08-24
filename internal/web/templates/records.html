@@ -1,0 +1,66 @@
+{{define "leaderboard"}}
+  {{if .Rows}}
+    <table class="ranking">
+      <tbody>
+      {{range .Rows}}
+        <tr>
+          <td class="rank">{{.Rank}}</td>
+          <td>
+            {{monthName .Month}}
+            {{with .Detail}}<div class="empty small">{{.}}</div>{{end}}
+          </td>
+          <td class="barcell">
+            <span class="share {{$.Tone}}" style="width: {{printf "%.0f" .Share}}%"></span>
+          </td>
+          <td class="num {{$.Tone}}">{{.Amount}} {{$.Base}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty">{{.Empty}}</p>
+  {{end}}
+{{end}}
+
+{{define "records.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Records</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Records</h1>
+  <nav>
+    <a href="/">Net worth</a>
+    <a href="/expenses">Expenses</a>
+    <a class="current" href="/records">Records</a>
+    <a href="/retire">Retirement</a>
+  </nav>
+  <p class="sub">Your best and worst months, in {{.Base}}.</p>
+</header>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+
+<section class="panel">
+  <h2>Best months for investments</h2>
+  {{template "leaderboard" dict "Rows" .BestGains "Base" .Base "Tone" "up"
+    "Empty" "No month has gained yet — record fund prices over time to see this."}}
+</section>
+
+<section class="panel">
+  <h2>Worst months for investments</h2>
+  {{template "leaderboard" dict "Rows" .WorstGains "Base" .Base "Tone" "down"
+    "Empty" "No losing month so far."}}
+</section>
+
+<section class="panel">
+  <h2>Worst months for spending</h2>
+  {{template "leaderboard" dict "Rows" .TopSpending "Base" .Base "Tone" "down"
+    "Empty" "No expenses recorded yet."}}
+  <p class="empty small">Money paid into funds is not counted here — only what you spent.</p>
+</section>
+</body>
+</html>{{end}}
