@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-const defaultEndpoint = "https://api.frankfurter.dev/v1/latest"
+// DefaultEndpoint serves the daily ECB rates without an API key.
+const DefaultEndpoint = "https://api.frankfurter.dev/v1/latest"
 
 // Rates holds how many units of the base currency one unit of each quoted
 // currency is worth.
@@ -35,21 +36,14 @@ type Client struct {
 	cached *Rates
 }
 
-func NewClient(base string, symbols []string) *Client {
+func NewClient(endpoint, base string, symbols []string) *Client {
 	return &Client{
-		endpoint: defaultEndpoint,
+		endpoint: endpoint,
 		base:     base,
 		symbols:  symbols,
 		ttl:      15 * time.Minute,
 		http:     &http.Client{Timeout: 8 * time.Second},
 	}
-}
-
-// Cached returns the last successful result without hitting the network.
-func (c *Client) Cached() *Rates {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.cached
 }
 
 // Rates returns fresh rates, refetching at most once per TTL. On failure the

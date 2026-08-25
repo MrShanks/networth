@@ -3,16 +3,25 @@ package store
 import (
 	"context"
 	"errors"
-	"math"
+	"fmt"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
-// Expense is a single spending record, in its own currency.
+// Entry kinds: money going out, and money coming in.
+const (
+	KindExpense = "expense"
+	KindIncome  = "income"
+)
+
+// Expense is a single cash flow record, in its own currency. A negative amount
+// on an expense is a refund, which nets off against the rest of the month.
 type Expense struct {
 	ID       int64
+	Kind     string
 	AsOf     string
 	Category string
 	Note     string
@@ -20,7 +29,13 @@ type Expense struct {
 	Amount   money.Amount
 }
 
-// Month is the YYYY-MM the expense belongs to.
+// IsRefund reports whether this entry gave money back.
+func (e Expense) IsRefund() bool { return e.Kind != KindIncome && e.Amount < 0 }
+
+// IsIncome reports whether this entry is money coming in.
+func (e Expense) IsIncome() bool { return e.Kind == KindIncome }
+
+// Month is the YYYY-MM the entry belongs to.
 func (e Expense) Month() string { return e.AsOf[:7] }
 
 const expensesSchema = `
@@ -36,7 +51,11 @@ CREATE TABLE IF NOT EXISTS expenses (
 CREATE INDEX IF NOT EXISTS expenses_as_of ON expenses(as_of);
 `
 
-func (s *Store) AddExpense(ctx context.Context, asOf, category, note, currency string, amount money.Amount) error {
+// AddEntry records money spent or earned.
+func (s *Store) AddEntry(ctx context.Context, kind, asOf, category, note, currency string, amount money.Amount) error {
+	if kind != KindExpense && kind != KindIncome {
+		return fmt.Errorf("unknown entry kind %q", kind)
+	}
 	if err := checkDate(asOf); err != nil {
 		return err
 	}
@@ -47,12 +66,12 @@ func (s *Store) AddExpense(ctx context.Context, asOf, category, note, currency s
 	if category == "" {
 		return errors.New("category is required")
 	}
-	if amount <= 0 {
-		return errors.New("amount must be greater than zero")
+	if amount == 0 {
+		return errors.New("amount cannot be zero")
 	}
 	_, err := s.db.ExecContext(ctx, `
-        INSERT INTO expenses (as_of, category, note, currency, cents) VALUES (?, ?, ?, ?, ?)`,
-		asOf, category, strings.TrimSpace(note), currency, int64(amount))
+        INSERT INTO expenses (kind, as_of, category, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?)`,
+		kind, asOf, category, strings.TrimSpace(note), currency, int64(amount))
 	return err
 }
 
@@ -60,18 +79,71 @@ func (s *Store) DeleteExpense(ctx context.Context, id int64) error {
 	return s.deleteRow(ctx, `DELETE FROM expenses WHERE id = ?`, id)
 }
 
-// Expenses returns every expense, newest first.
+// DeleteExpensesForMonth removes every entry in a YYYY-MM month.
+func (s *Store) DeleteExpensesForMonth(ctx context.Context, month string) (int, error) {
+	if _, err := time.Parse("2006-01", month); err != nil {
+		return 0, fmt.Errorf("invalid month %q", month)
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM expenses WHERE as_of LIKE ?`, month+"-%")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// ImportExpenses adds entries in bulk, leaving out any that are already
+// stored, so re-importing the same export changes nothing. Identical entries
+// recorded twice on purpose are kept: only the surplus is treated as duplicate.
+func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, duplicates int, err error) {
+	existing, err := s.Expenses(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	key := func(e Expense) string {
+		return fmt.Sprintf("%s|%s|%s|%s|%s|%d", e.Kind, e.AsOf, e.Category, e.Note, e.Currency, e.Amount)
+	}
+	seen := map[string]int{}
+	for _, e := range existing {
+		seen[key(e)]++
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	for _, row := range rows {
+		if k := key(row); seen[k] > 0 {
+			seen[k]--
+			duplicates++
+			continue
+		}
+		_, err := tx.ExecContext(ctx, `
+            INSERT INTO expenses (kind, as_of, category, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?)`,
+			row.Kind, row.AsOf, row.Category, row.Note, row.Currency, int64(row.Amount))
+		if err != nil {
+			return 0, 0, err
+		}
+		added++
+	}
+	return added, duplicates, tx.Commit()
+}
+
+// Expenses returns every entry, newest first.
 func (s *Store) Expenses(ctx context.Context) ([]Expense, error) {
 	var out []Expense
 	err := query(ctx, s.db, `
-        SELECT id, as_of, category, note, currency, cents
+        SELECT id, kind, as_of, category, note, currency, cents
         FROM expenses ORDER BY as_of DESC, id DESC`,
 		func(scan scanner) error {
 			var (
 				e     Expense
 				cents int64
 			)
-			if err := scan(&e.ID, &e.AsOf, &e.Category, &e.Note, &e.Currency, &cents); err != nil {
+			if err := scan(&e.ID, &e.Kind, &e.AsOf, &e.Category, &e.Note, &e.Currency, &cents); err != nil {
 				return err
 			}
 			e.Amount = money.Amount(cents)
@@ -88,35 +160,90 @@ type CategoryTotal struct {
 	Share    float64      // percent of the month's total
 }
 
-// ExpenseMonth aggregates one calendar month of spending.
+// ExpenseMonth aggregates one calendar month of cash flow.
 type ExpenseMonth struct {
 	Month      string
-	Total      money.Amount // in the base currency
+	Total      money.Amount // spending, net of refunds, in the base currency
+	Refunds    money.Amount // what came back, as a positive number
+	Income     money.Amount
 	Categories []CategoryTotal
-	Expenses   []Expense // newest first
+	Expenses   []Expense // every entry of the month, newest first
+}
+
+// Saved is what was left of the month's income.
+func (m ExpenseMonth) Saved() money.Amount { return m.Income - m.Total }
+
+// SavedPct is the share of income that was not spent.
+func (m ExpenseMonth) SavedPct() float64 {
+	if m.Income <= 0 {
+		return 0
+	}
+	return float64(m.Saved()) / float64(m.Income) * 100
 }
 
 // ExpenseReport summarises spending across months.
 type ExpenseReport struct {
 	Months  []ExpenseMonth // oldest first
 	Total   money.Amount
-	Average money.Amount // per month with any spending
+	Income  money.Amount
+	Average money.Amount // spending per month with any entries
 }
 
 // RecentAverage is the average monthly spending over the last n months that
-// have any expenses recorded.
+// have any entries recorded.
 func (r ExpenseReport) RecentAverage(n int) money.Amount {
-	months := r.Months
-	if len(months) > n {
-		months = months[len(months)-n:]
+	return r.recent(n, func(m ExpenseMonth) money.Amount { return m.Total })
+}
+
+// RecentSaved is the average monthly saving over the last n months, counting
+// only months with income recorded: without it a month looks like pure loss.
+func (r ExpenseReport) RecentSaved(n int) money.Amount {
+	var total money.Amount
+	count := 0
+	for _, m := range r.lastMonths(n) {
+		if m.Income > 0 {
+			total += m.Saved()
+			count++
+		}
 	}
+	if count == 0 {
+		return 0
+	}
+	return total / money.Amount(count)
+}
+
+// RecentSavedMonths is how many months RecentSaved could actually use.
+func (r ExpenseReport) RecentSavedMonths(n int) int {
+	count := 0
+	for _, m := range r.lastMonths(n) {
+		if m.Income > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// RecentIncome is the average monthly income over the last n months.
+func (r ExpenseReport) RecentIncome(n int) money.Amount {
+	return r.recent(n, func(m ExpenseMonth) money.Amount { return m.Income })
+}
+
+func (r ExpenseReport) lastMonths(n int) []ExpenseMonth {
+	if len(r.Months) > n {
+		return r.Months[len(r.Months)-n:]
+	}
+	return r.Months
+}
+
+func (r ExpenseReport) recent(n int, of func(ExpenseMonth) money.Amount) money.Amount {
+	months := r.lastMonths(n)
 	if len(months) == 0 {
 		return 0
 	}
 
 	var total money.Amount
 	for _, m := range months {
-		total += m.Total
+		total += of(m)
 	}
 	return total / money.Amount(len(months))
 }
@@ -124,6 +251,52 @@ func (r ExpenseReport) RecentAverage(n int) money.Amount {
 // RecentMonths is how many months RecentAverage actually averaged over.
 func (r ExpenseReport) RecentMonths(n int) int {
 	return min(len(r.Months), n)
+}
+
+// CategorySummary is one category's spending across every month tracked.
+type CategorySummary struct {
+	Category string
+	Total    money.Amount
+	Share    float64        // percent of everything spent
+	PerMonth money.Amount   // averaged over every month tracked, not just the ones it appears in
+	Months   int            // months it appears in
+	Series   []money.Amount // one entry per month of the report, oldest first
+}
+
+// ByCategory totals every category over the whole report, biggest first.
+func (r ExpenseReport) ByCategory() []CategorySummary {
+	if len(r.Months) == 0 {
+		return nil
+	}
+
+	index := map[string]int{}
+	var out []CategorySummary
+
+	for i, month := range r.Months {
+		for _, c := range month.Categories {
+			at, ok := index[c.Category]
+			if !ok {
+				at = len(out)
+				index[c.Category] = at
+				out = append(out, CategorySummary{
+					Category: c.Category,
+					Series:   make([]money.Amount, len(r.Months)),
+				})
+			}
+			out[at].Total += c.Total
+			out[at].Series[i] = c.Total
+			out[at].Months++
+		}
+	}
+
+	for i := range out {
+		out[i].PerMonth = out[i].Total / money.Amount(len(r.Months))
+		if r.Total > 0 {
+			out[i].Share = float64(out[i].Total) / float64(r.Total) * 100
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Total > out[j].Total })
+	return out
 }
 
 // Month returns the requested month, or the latest one when month is empty.
@@ -165,15 +338,23 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 	byCategory := map[string]map[string]money.Amount{}
 
 	for _, e := range expenses {
-		amount := convertAt(e.Amount, e.Currency, rates)
+		amount, _ := convert(e.Amount, e.Currency, rates)
 		m, ok := byMonth[e.Month()]
 		if !ok {
 			m = &ExpenseMonth{Month: e.Month()}
 			byMonth[e.Month()] = m
 			byCategory[e.Month()] = map[string]money.Amount{}
 		}
-		m.Total += amount
 		m.Expenses = append(m.Expenses, e)
+
+		if e.IsIncome() {
+			m.Income += amount
+			continue // income is not spending, and has no place in the categories
+		}
+		m.Total += amount
+		if amount < 0 {
+			m.Refunds -= amount
+		}
 		byCategory[e.Month()][e.Category] += amount
 	}
 
@@ -195,6 +376,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		})
 		report.Months = append(report.Months, *m)
 		report.Total += m.Total
+		report.Income += m.Income
 	}
 	sort.Slice(report.Months, func(i, j int) bool { return report.Months[i].Month < report.Months[j].Month })
 
@@ -202,12 +384,4 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		report.Average = report.Total / money.Amount(n)
 	}
 	return report
-}
-
-func convertAt(a money.Amount, currency string, rates map[string]float64) money.Amount {
-	rate := rates[currency]
-	if rate <= 0 || rate == 1 {
-		return a
-	}
-	return money.Amount(math.Round(float64(a) * rate))
 }

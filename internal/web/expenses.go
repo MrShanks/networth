@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 type expensesData struct {
@@ -18,27 +18,29 @@ type expensesData struct {
 	Month      store.ExpenseMonth
 	Known      bool
 	Categories []string
+	ByCategory []store.CategorySummary
+	Rules      []store.Rule
 	Bars       BarChart
 	Today      string
-	FX         fxView
+	Notice     string
 	Error      string
 }
 
 func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
-	ledger, err := s.store.Load(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	expenses, err := s.store.Expenses(r.Context())
+	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 
-	fxView := s.rates(r.Context(), ledger)
-	report := store.BuildExpenseReport(expenses, ledger.Rates)
+	report := v.report
 	month, known := report.Find(r.URL.Query().Get("month"))
+
+	rules, err := s.store.Rules(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 
 	s.render(w, "expenses.html", expensesData{
 		Base:       store.Base,
@@ -47,9 +49,11 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 		Month:      month,
 		Known:      known,
 		Categories: report.UsedCategories(),
+		ByCategory: report.ByCategory(),
+		Rules:      rules,
 		Bars:       buildBars(report.Months, month.Month),
 		Today:      time.Now().Format("2006-01-02"),
-		FX:         fxView,
+		Notice:     r.URL.Query().Get("msg"),
 		Error:      r.URL.Query().Get("err"),
 	})
 }
@@ -65,7 +69,12 @@ func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
 		category = other
 	}
 
-	err = s.store.AddExpense(r.Context(), s.date(r), category,
+	kind := store.KindExpense
+	if r.FormValue("kind") == store.KindIncome {
+		kind = store.KindIncome
+	}
+
+	err = s.store.AddEntry(r.Context(), kind, s.date(r), category,
 		r.FormValue("note"), r.FormValue("currency"), amount)
 	if err != nil {
 		s.redirectTo(w, r, "/expenses", err.Error())
@@ -85,6 +94,60 @@ func (s *Server) handleDeleteExpense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirectTo(w, r, "/expenses", "")
+}
+
+func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {
+	month := r.PathValue("month")
+	if _, err := s.store.DeleteExpensesForMonth(r.Context(), month); err != nil {
+		s.redirectTo(w, r, "/expenses", err.Error())
+		return
+	}
+	s.redirectTo(w, r, "/expenses", "")
+}
+
+// handleAddRule saves a rule and applies it to what is already stored, so a
+// category can be fixed everywhere at once.
+func (s *Server) handleAddRule(w http.ResponseWriter, r *http.Request) {
+	pattern := r.FormValue("pattern")
+	category := r.FormValue("category")
+	if other := strings.TrimSpace(r.FormValue("new_category")); other != "" {
+		category = other
+	}
+
+	if err := s.store.AddRule(r.Context(), pattern, category); err != nil {
+		s.redirectTo(w, r, "/expenses", "could not add the rule: "+err.Error())
+		return
+	}
+
+	moved, err := s.store.Recategorise(r.Context(),
+		store.Rule{Pattern: strings.TrimSpace(pattern), Category: strings.TrimSpace(category)})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.noticeTo(w, r, "/expenses",
+		fmt.Sprintf("Rule saved, %d existing entr%s moved to %s.",
+			moved, plural(moved, "y", "ies"), strings.TrimSpace(category)))
+}
+
+func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirectTo(w, r, "/expenses", "invalid id")
+		return
+	}
+	if err := s.store.DeleteRule(r.Context(), id); err != nil {
+		s.redirectTo(w, r, "/expenses", err.Error())
+		return
+	}
+	s.redirectTo(w, r, "/expenses", "")
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // Bar is one month's column in the spending chart.
@@ -113,21 +176,21 @@ func buildBars(months []store.ExpenseMonth, current string) BarChart {
 		months = months[len(months)-12:]
 	}
 
-	max := 0.0
+	top := 0.0
 	for _, m := range months {
-		max = maxf(max, m.Total.Float())
+		top = max(top, m.Total.Float())
 	}
-	if max <= 0 {
-		max = 1
+	if top <= 0 {
+		top = 1
 	}
 
 	plotW := float64(chartWidth - 2*chartPadX)
 	plotH := float64(chartHeight - 2*chartPadY)
 	slot := plotW / float64(len(months))
-	width := minf(56, slot*0.6)
+	width := min(56, slot*0.6)
 
 	for i, m := range months {
-		h := plotH * m.Total.Float() / max
+		h := plotH * max(0, m.Total.Float()) / top
 		c.Bars = append(c.Bars, Bar{
 			X:       chartPadX + slot*float64(i) + (slot-width)/2,
 			Y:       chartPadY + plotH - h,
@@ -140,7 +203,7 @@ func buildBars(months []store.ExpenseMonth, current string) BarChart {
 	}
 
 	for i := 0; i <= 4; i++ {
-		v := max * float64(i) / 4
+		v := top * float64(i) / 4
 		c.YTicks = append(c.YTicks, chartLabel{
 			X:    chartPadX,
 			Y:    chartPadY + plotH*(1-float64(i)/4),

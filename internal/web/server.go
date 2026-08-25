@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MrShanks/networh/internal/fx"
-	"github.com/MrShanks/networh/internal/money"
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/fx"
+	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 //go:embed templates/*.html static/*
@@ -30,11 +30,21 @@ type Server struct {
 	mux   *http.ServeMux
 }
 
+func absAmount(amount money.Amount) money.Amount {
+	if amount < 0 {
+		return -amount
+	}
+	return amount
+}
+
 func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"spark":     sparkPoints,
-		"monthName": monthName,
-		"dict":      dict,
+		"spark":      sparkPoints,
+		"trend":      sparkAmounts,
+		"monthName":  monthName,
+		"absAmount":  absAmount,
+		"dict":       dict,
+		"classLabel": store.ClassLabel,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -45,15 +55,38 @@ func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, err
 	return srv, nil
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && !sameSite(r) {
+		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+// sameSite blocks writes triggered by another site in the same browser. Both
+// headers are absent outside browsers, which leaves scripting with curl free.
+func sameSite(r *http.Request) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		return site == "same-origin" || site == "none"
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == r.Host
+}
 
 func (s *Server) routes() {
 	s.mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
 	s.mux.HandleFunc("GET /{$}", s.handleDashboard)
 	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
+	s.mux.HandleFunc("POST /accounts/{id}/currency", s.handleSetAccountCurrency)
+	s.mux.HandleFunc("POST /accounts/{id}/class", s.handleSetAccountClass)
 	s.mux.HandleFunc("POST /funds", s.handleCreateFund)
 	s.mux.HandleFunc("POST /funds/{id}/delete", s.handleDeleteFund)
+	s.mux.HandleFunc("POST /funds/{id}/class", s.handleSetFundClass)
 	s.mux.HandleFunc("POST /balances", s.handleSetBalance)
 	s.mux.HandleFunc("POST /balances/{id}/delete", s.handleDeleteBalance)
 	s.mux.HandleFunc("POST /fund-updates", s.handleFundUpdate)
@@ -63,6 +96,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
 	s.mux.HandleFunc("POST /expenses", s.handleAddExpense)
 	s.mux.HandleFunc("POST /expenses/{id}/delete", s.handleDeleteExpense)
+	s.mux.HandleFunc("POST /expenses/month/{month}/delete", s.handleDeleteMonth)
+	s.mux.HandleFunc("POST /rules", s.handleAddRule)
+	s.mux.HandleFunc("POST /rules/{id}/delete", s.handleDeleteRule)
+	s.mux.HandleFunc("POST /expenses/import", s.handleImportExpenses)
 	s.mux.HandleFunc("GET /retire", s.handleRetire)
 	s.mux.HandleFunc("GET /records", s.handleRecords)
 }
@@ -86,7 +123,10 @@ func dict(pairs ...any) (map[string]any, error) {
 type dashboardData struct {
 	Base         string
 	Currencies   []string
+	AssetClasses []string
 	Now          store.Valuation
+	Allocation   store.Allocation
+	Liquidity    store.Liquidity
 	Change       money.Amount
 	HasChange    bool
 	Accounts     []store.Account
@@ -101,22 +141,26 @@ type dashboardData struct {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	ledger, err := s.store.Load(r.Context())
+	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	ledger := v.ledger
 
-	fxView := s.rates(r.Context(), ledger)
 	history := ledger.History()
+	now := ledger.At("")
 	data := dashboardData{
 		Base:         store.Base,
 		Currencies:   store.Currencies,
-		Now:          ledger.At(""),
+		AssetClasses: store.AssetClasses,
+		Now:          now,
+		Allocation:   now.Allocation(),
+		Liquidity:    now.Liquidity(),
 		Accounts:     ledger.Accounts,
 		Funds:        ledger.Funds,
 		Entries:      ledger.Entries(50),
-		FX:           fxView,
+		FX:           v.fx,
 		MissingRates: ledger.MissingRates(),
 		Chart:        buildChart(history),
 		InvestChart:  buildInvestChart(ledger.InvestHistory()),
@@ -137,9 +181,26 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "name is required")
 		return
 	}
-	err := s.store.CreateAccount(r.Context(), name, r.FormValue("kind"), r.FormValue("currency"))
+	class := r.FormValue("class")
+	if class == "" {
+		class = store.ClassCash
+	}
+	err := s.store.CreateAccount(r.Context(), name, r.FormValue("kind"), r.FormValue("currency"), class)
 	if err != nil {
 		s.redirect(w, r, "could not add account: "+err.Error())
+		return
+	}
+	s.redirect(w, r, "")
+}
+
+func (s *Server) handleSetAccountClass(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirect(w, r, "invalid id")
+		return
+	}
+	if err := s.store.SetAccountClass(r.Context(), id, r.FormValue("class")); err != nil {
+		s.redirect(w, r, err.Error())
 		return
 	}
 	s.redirect(w, r, "")
@@ -157,9 +218,26 @@ func (s *Server) handleCreateFund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ticker := strings.ToUpper(strings.TrimSpace(r.FormValue("ticker")))
+	class := r.FormValue("class")
+	if class == "" {
+		class = store.ClassStocks
+	}
 
-	if err := s.store.CreateFund(r.Context(), accountID, name, ticker, r.FormValue("currency")); err != nil {
+	if err := s.store.CreateFund(r.Context(), accountID, name, ticker, r.FormValue("currency"), class); err != nil {
 		s.redirect(w, r, "could not add fund: "+err.Error())
+		return
+	}
+	s.redirect(w, r, "")
+}
+
+func (s *Server) handleSetFundClass(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirect(w, r, "invalid id")
+		return
+	}
+	if err := s.store.SetFundClass(r.Context(), id, r.FormValue("class")); err != nil {
+		s.redirect(w, r, err.Error())
 		return
 	}
 	s.redirect(w, r, "")
@@ -223,6 +301,21 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	s.withID(w, r, s.store.DeleteAccount)
 }
 
+// handleSetAccountCurrency relabels an account's currency; it does not convert
+// the balance already stored, only how it is read from now on.
+func (s *Server) handleSetAccountCurrency(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirect(w, r, "invalid id")
+		return
+	}
+	if err := s.store.SetAccountCurrency(r.Context(), id, r.FormValue("currency")); err != nil {
+		s.redirect(w, r, err.Error())
+		return
+	}
+	s.redirect(w, r, "")
+}
+
 func (s *Server) handleDeleteFund(w http.ResponseWriter, r *http.Request) {
 	s.withID(w, r, s.store.DeleteFund)
 }
@@ -273,6 +366,11 @@ func (s *Server) redirectTo(w http.ResponseWriter, r *http.Request, target, errM
 		target += "?err=" + url.QueryEscape(errMsg)
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// noticeTo redirects with something that went right.
+func (s *Server) noticeTo(w http.ResponseWriter, r *http.Request, target, msg string) {
+	http.Redirect(w, r, target+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

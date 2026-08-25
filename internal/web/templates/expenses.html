@@ -15,55 +15,95 @@
     <a href="/records">Records</a>
     <a href="/retire">Retirement</a>
   </nav>
-  <p class="sub">Monthly spending, totalled in {{.Base}} at the current rate.</p>
+  <p class="sub">
+    Monthly spending, totalled in {{.Base}} at the current rate.
+    <button type="button" class="link" id="reset-layout">Reset layout</button>
+  </p>
+  <div class="toolbar">
+    <button type="button" class="pill-btn" onclick="entryDialog.showModal()">Add an entry</button>
+    <button type="button" class="pill-btn" onclick="importDialog.showModal()">Import from your bank</button>
+    <button type="button" class="pill-btn" onclick="rulesDialog.showModal()">Category rules</button>
+  </div>
 </header>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
 
-<section class="cards">
-  <div class="card">
-    <span class="label">{{monthName .Month.Month}}</span>
-    <strong class="value">{{.Month.Total}} {{.Base}}</strong>
-    {{if not .Known}}<span class="empty small">nothing recorded yet</span>{{end}}
-  </div>
-  <div class="card">
-    <span class="label">Monthly average</span>
-    <strong class="value">{{.Report.Average}} {{.Base}}</strong>
-    <span class="empty small">over {{len .Report.Months}} month(s)</span>
-  </div>
-  <div class="card">
-    <span class="label">Recorded in total</span>
-    <strong class="value">{{.Report.Total}} {{.Base}}</strong>
+<div class="board" id="board">
+
+<section class="widget" data-widget="summary" data-span="2">
+  {{template "widgethead" (printf "Summary (%s)" .Base)}}
+  <div class="widget-body">
+    <div class="cards">
+      <div class="card">
+        <span class="label">{{monthName .Month.Month}} spending</span>
+        <strong class="value">{{.Month.Total}}</strong>
+        {{if .Month.Refunds}}
+          <span class="delta up">after {{.Month.Refunds}} of refunds</span>
+        {{else if not .Known}}
+          <span class="empty small">nothing recorded yet</span>
+        {{end}}
+      </div>
+      <div class="card">
+        <span class="label">Income</span>
+        <strong class="value up">{{.Month.Income}}</strong>
+      </div>
+      <div class="card">
+        <span class="label">Saved</span>
+        <strong class="value {{if lt .Month.Saved 0}}down{{else}}up{{end}}">{{.Month.Saved}}</strong>
+        {{if .Month.Income}}
+          <span class="delta {{if lt .Month.Saved 0}}down{{else}}up{{end}}">
+            {{printf "%.0f" .Month.SavedPct}}% of what came in
+          </span>
+        {{end}}
+      </div>
+      <div class="card">
+        <span class="label">Monthly average</span>
+        <strong class="value">{{.Report.Average}}</strong>
+        <span class="empty small">spent, over {{len .Report.Months}} month(s)</span>
+      </div>
+    </div>
   </div>
 </section>
 
-<section class="panel">
-  <h2>Per month</h2>
-  {{if .Bars.Empty}}
-    <p class="empty">Record an expense to see the trend.</p>
-  {{else}}
-    <svg class="chart" viewBox="0 0 {{.Bars.Width}} {{.Bars.Height}}" role="img" aria-label="Spending per month">
-      {{range .Bars.YTicks}}
-        <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Bars.Width}}" y2="{{.Y}}"/>
-        <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
-      {{end}}
-      {{range .Bars.Bars}}
-        <a href="/expenses?month={{.Label}}">
-          <rect class="bar{{if .Current}} current{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="3">
-            <title>{{.Title}}</title>
-          </rect>
-          <text class="tick" x="{{.X}}" y="{{$.Bars.Height}}" dx="{{.W}}" dy="-4" text-anchor="middle">{{.Label}}</text>
-        </a>
-      {{end}}
-    </svg>
-  {{end}}
+<section class="widget" data-widget="per-month" data-span="2">
+  {{template "widgethead" "Per month"}}
+  <div class="widget-body">
+    {{if .Bars.Empty}}
+      <p class="empty">Record an expense to see the trend.</p>
+    {{else}}
+      <svg class="chart" viewBox="0 0 {{.Bars.Width}} {{.Bars.Height}}" role="img" aria-label="Spending per month">
+        {{range .Bars.YTicks}}
+          <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Bars.Width}}" y2="{{.Y}}"/>
+          <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+        {{end}}
+        {{range .Bars.Bars}}
+          <a href="/expenses?month={{.Label}}">
+            <rect class="bar{{if .Current}} current{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="3">
+              <title>{{.Title}}</title>
+            </rect>
+            <text class="tick" x="{{.X}}" y="{{$.Bars.Height}}" dx="{{.W}}" dy="-4" text-anchor="middle">{{.Label}}</text>
+          </a>
+        {{end}}
+      </svg>
+    {{end}}
+  </div>
 </section>
 
-<div class="grid">
-  <section class="panel">
-    <h2>Add an expense</h2>
+<dialog id="entryDialog" class="modal">
+  <header class="modal-head">
+    <h2>Add an entry</h2>
+    <button type="button" class="icon" onclick="entryDialog.close()" aria-label="Close">&times;</button>
+  </header>
+  <div class="modal-body">
     <form method="post" action="/expenses" class="stack">
-      <label>Amount
+      <label>Kind
+        <select name="kind">
+          <option value="expense">Expense</option>
+          <option value="income">Income</option>
+        </select>
+      </label>
+      <label><span>Amount {{template "hint" "On an expense, use a minus for a refund."}}</span>
         <input type="text" name="amount" inputmode="decimal" placeholder="42.90" required>
       </label>
       <label>Currency
@@ -83,12 +123,34 @@
       <label>Date
         <input type="date" name="as_of" value="{{.Today}}" required>
       </label>
-      <button type="submit">Add expense</button>
+      <button type="submit">Add entry</button>
     </form>
-  </section>
+  </div>
+</dialog>
 
-  <section class="panel">
-    <h2>{{monthName .Month.Month}} by category</h2>
+<dialog id="importDialog" class="modal">
+  <header class="modal-head">
+    <h2>Import from your bank</h2>
+    <button type="button" class="icon" onclick="importDialog.close()" aria-label="Close">&times;</button>
+  </header>
+  <div class="modal-body">
+    <form method="post" action="/expenses/import" enctype="multipart/form-data" class="stack">
+      <label><span>CSV export {{template "hint" "The account or card column is ignored."}}</span>
+        <input type="file" name="file" accept=".csv,text/csv" required>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="transfers">
+        Also import transfers and investments
+        <span class="hint" data-tip="Off by default: card payments and money moved to a broker are not spending."></span>
+      </label>
+      <button type="submit">Import</button>
+    </form>
+  </div>
+</dialog>
+
+<section class="widget" data-widget="month-categories" data-span="1">
+  {{template "widgethead" (printf "%s by category" (monthName .Month.Month))}}
+  <div class="widget-body">
     {{if .Month.Categories}}
       <table>
         <tbody>
@@ -105,33 +167,130 @@
     {{else}}
       <p class="empty">Nothing recorded for this month.</p>
     {{end}}
-  </section>
+  </div>
+</section>
+
+<section class="widget" data-widget="by-category" data-span="2">
+  {{template "widgethint" dict "Title" "Spending by category" "Hint"
+    (printf "Per-month figures are averaged over all %d tracked month(s), in %s." (len .Report.Months) .Base)}}
+  <div class="widget-body">
+    {{if .ByCategory}}
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th><th>Trend</th><th class="num">Months</th>
+            <th class="num">Per month</th><th class="num">Total</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {{range .ByCategory}}
+          <tr>
+            <td>{{.Category}}</td>
+            <td>
+              {{with trend .Series}}
+                <svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
+                  <polyline points="{{.}}"/>
+                </svg>
+              {{else}}<span class="empty small">one month</span>{{end}}
+            </td>
+            <td class="num">{{.Months}} of {{len $.Report.Months}}</td>
+            <td class="num">{{.PerMonth}}</td>
+            <td class="num">{{.Total}}</td>
+            <td class="barcell">
+              <span class="share" style="width: {{printf "%.0f" .Share}}%"></span>
+              <span class="empty small">{{printf "%.0f" .Share}}%</span>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty">No expenses recorded yet.</p>
+    {{end}}
+  </div>
+</section>
+
+<section class="widget" data-widget="entries" data-span="2">
+  <header class="widget-head">
+    <h2>{{monthName .Month.Month}} entries</h2>
+    <div class="widget-tools">
+      {{if .Month.Expenses}}
+        <form method="post" action="/expenses/month/{{.Month.Month}}/delete"
+              onsubmit="return confirm('Delete all {{len .Month.Expenses}} entries of {{monthName .Month.Month}}?')">
+          <button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button>
+        </form>
+      {{end}}
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+  <div class="widget-body">
+    {{if .Month.Expenses}}
+      <table>
+        <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody>
+        {{range .Month.Expenses}}
+          <tr>
+            <td>{{.AsOf}}</td>
+            <td>
+              <span class="pill {{if .IsIncome}}bought{{else}}cur{{end}}">{{.Category}}</span>
+            </td>
+            <td class="empty">{{.Note}}</td>
+            <td class="num {{if .IsIncome}}up{{else}}down{{end}}">
+              {{if .IsIncome}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}
+            </td>
+            <td class="num">
+              <form method="post" action="/expenses/{{.ID}}/delete">
+                <button class="icon danger" type="submit" aria-label="Delete expense" title="Delete expense">&#128465;</button>
+              </form>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty">No expenses recorded for this month.</p>
+    {{end}}
+  </div>
+</section>
+
 </div>
 
-<section class="panel">
-  <h2>{{monthName .Month.Month}} entries</h2>
-  {{if .Month.Expenses}}
-    <table>
-      <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead>
-      <tbody>
-      {{range .Month.Expenses}}
-        <tr>
-          <td>{{.AsOf}}</td>
-          <td><span class="pill cur">{{.Category}}</span></td>
-          <td class="empty">{{.Note}}</td>
-          <td class="num">{{.Amount}} {{.Currency}}</td>
-          <td class="num">
-            <form method="post" action="/expenses/{{.ID}}/delete">
-              <button class="link danger" type="submit">Delete</button>
-            </form>
-          </td>
-        </tr>
-      {{end}}
-      </tbody>
-    </table>
-  {{else}}
-    <p class="empty">No expenses recorded for this month.</p>
-  {{end}}
-</section>
+<dialog id="rulesDialog" class="modal">
+  <header class="modal-head">
+    <h2>Category rules</h2>
+    <button type="button" class="icon" onclick="rulesDialog.close()" aria-label="Close">&times;</button>
+  </header>
+  <div class="modal-body">
+    <form method="post" action="/rules" class="stack">
+      <label>When the description contains
+        <input type="text" name="pattern" placeholder="IHLY THOMAS" required maxlength="80">
+      </label>
+      <label>Put it in
+        <input type="text" name="new_category" list="categories" placeholder="Rent" required maxlength="40">
+      </label>
+      <button type="submit">Save rule</button>
+    </form>
+    {{if .Rules}}
+      <table class="tight">
+        <tbody>
+        {{range .Rules}}
+          <tr>
+            <td class="empty">{{.Pattern}}</td>
+            <td><span class="pill cur">{{.Category}}</span></td>
+            <td class="num">
+              <form method="post" action="/rules/{{.ID}}/delete">
+                <button class="icon danger" type="submit" aria-label="Delete rule" title="Delete rule">&#128465;</button>
+              </form>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{end}}
+  </div>
+</dialog>
+
+<script src="/static/board.js"></script>
 </body>
 </html>{{end}}

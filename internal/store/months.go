@@ -3,7 +3,7 @@ package store
 import (
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 // MonthGain is how much the funds moved in a calendar month, with new money

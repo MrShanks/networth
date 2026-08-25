@@ -1,0 +1,60 @@
+{{define "import.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Import</h1>
+  <nav>
+    <a href="/">Net worth</a>
+    <a href="/expenses">Expenses</a>
+    <a href="/records">Records</a>
+    <a href="/retire">Retirement</a>
+  </nav>
+  <p class="sub">What came out of your bank export.</p>
+</header>
+
+<section class="cards">
+  <div class="card">
+    <span class="label">Imported</span>
+    <strong class="value up">{{.Added}}</strong>
+    <span class="empty small">new expense(s)</span>
+  </div>
+  <div class="card">
+    <span class="label">Already there</span>
+    <strong class="value">{{.Duplicate}}</strong>
+    <span class="empty small">skipped, so importing twice is safe</span>
+  </div>
+  <div class="card">
+    <span class="label">Left out</span>
+    <strong class="value">{{len .Skips}}</strong>
+    <span class="empty small">income, transfers and unreadable lines</span>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Lines left out</h2>
+  {{if .Skips}}
+    <table>
+      <thead><tr><th class="num">Line</th><th>Reason</th><th>Description</th></tr></thead>
+      <tbody>
+      {{range .Skips}}
+        <tr>
+          <td class="num">{{.Line}}</td>
+          <td><span class="pill cur">{{.Reason}}</span></td>
+          <td class="empty">{{.Detail}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty">Every line was used.</p>
+  {{end}}
+  <p><a href="/expenses">Back to expenses</a></p>
+</section>
+</body>
+</html>{{end}}

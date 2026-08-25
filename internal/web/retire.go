@@ -5,45 +5,39 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
-	"github.com/MrShanks/networh/internal/retire"
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/retire"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 type retireData struct {
-	Base       string
-	Plan       retire.Plan
-	Chart      Chart
-	Runway     retire.Runway
-	BurnChart  Chart
-	Passion    money.Amount
-	WorkMonths int
-	AvgMonths  int
-	HasExpense bool
-	Error      string
+	Base        string
+	Plan        retire.Plan
+	Chart       Chart
+	Runway      retire.Runway
+	BurnChart   Chart
+	Passion     money.Amount
+	WorkMonths  int
+	AvgMonths   int
+	SavedMonths int
+	HasExpense  bool
+	Error       string
 }
 
 func (s *Server) handleRetire(w http.ResponseWriter, r *http.Request) {
-	ledger, err := s.store.Load(r.Context())
+	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	expenses, err := s.store.Expenses(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-
-	s.rates(r.Context(), ledger)
-	report := store.BuildExpenseReport(expenses, ledger.Rates)
+	report := v.report
 
 	q := r.URL.Query()
 	const window = 12
 	params := retire.Params{
-		NetWorth:        ledger.At("").NetWorth(),
+		NetWorth:        v.ledger.At("").NetWorth(),
 		MonthlyExpenses: report.RecentAverage(window),
-		MonthlySavings:  amountParam(q.Get("savings"), 0),
+		MonthlySavings:  amountParam(q.Get("savings"), report.RecentSaved(window)),
 		ReturnPct:       floatParam(q.Get("return"), 7),
 		InflationPct:    floatParam(q.Get("inflation"), 2),
 		WithdrawalPct:   floatParam(q.Get("withdrawal"), 4),
@@ -66,16 +60,17 @@ func (s *Server) handleRetire(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.render(w, "retire.html", retireData{
-		Base:       store.Base,
-		Plan:       plan,
-		Chart:      buildPlanChart(plan),
-		Runway:     runway,
-		BurnChart:  buildBurnChart(runway),
-		Passion:    passion,
-		WorkMonths: workMonths,
-		AvgMonths:  report.RecentMonths(window),
-		HasExpense: len(report.Months) > 0,
-		Error:      q.Get("err"),
+		Base:        store.Base,
+		Plan:        plan,
+		Chart:       buildPlanChart(plan),
+		Runway:      runway,
+		BurnChart:   buildBurnChart(runway),
+		Passion:     passion,
+		WorkMonths:  workMonths,
+		AvgMonths:   report.RecentMonths(window),
+		SavedMonths: report.RecentSavedMonths(window),
+		HasExpense:  len(report.Months) > 0,
+		Error:       q.Get("err"),
 	})
 }
 
@@ -84,7 +79,7 @@ func buildBurnChart(run retire.Runway) Chart {
 	if len(run.Scenarios) == 0 || len(run.Dates) < 2 {
 		return Chart{Empty: true}
 	}
-	step := max2(1, len(run.Dates)/120)
+	step := max(1, len(run.Dates)/120)
 
 	var dated []datedValue
 	for i := 0; i < len(run.Dates); i += step {
@@ -110,7 +105,7 @@ func buildBurnChart(run retire.Runway) Chart {
 func buildPlanChart(plan retire.Plan) Chart {
 	points := plan.Points
 	// Keep the SVG small on long projections.
-	step := max2(1, len(points)/120)
+	step := max(1, len(points)/120)
 
 	dated := make([]datedValue, 0, len(points)/step+1)
 	target := make([]float64, 0, len(points)/step+1)

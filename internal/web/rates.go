@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 // Pair is a quoted currency pair, e.g. USD/CHF 0.7995.
@@ -22,6 +22,29 @@ type fxView struct {
 	Live    bool   `json:"live"`
 	Checked string `json:"checked"`
 	Note    string `json:"note,omitempty"`
+}
+
+// view is everything the pages start from: the ledger valued at the current
+// exchange rates, and the expenses grouped by month.
+type view struct {
+	ledger *store.Ledger
+	report store.ExpenseReport
+	fx     fxView
+}
+
+// load reads the database and applies the current exchange rates to it.
+func (s *Server) load(ctx context.Context) (view, error) {
+	ledger, err := s.store.Load(ctx)
+	if err != nil {
+		return view{}, err
+	}
+	expenses, err := s.store.Expenses(ctx)
+	if err != nil {
+		return view{}, err
+	}
+
+	fx := s.rates(ctx, ledger)
+	return view{ledger: ledger, report: store.BuildExpenseReport(expenses, ledger.Rates), fx: fx}, nil
 }
 
 // rates fetches the current rates, falling back to whatever the ledger already

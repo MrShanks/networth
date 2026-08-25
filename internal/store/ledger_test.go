@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 func TestTrack(t *testing.T) {

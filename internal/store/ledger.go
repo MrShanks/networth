@@ -6,7 +6,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 // Trade is a purchase (positive units) or sale, in the fund's currency.
@@ -66,10 +66,10 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 		prices: map[int64][]PriceMark{},
 	}
 
-	if err := query(ctx, s.db, `SELECT id, name, kind, currency FROM accounts ORDER BY kind, name`,
+	if err := query(ctx, s.db, `SELECT id, name, kind, currency, asset_class FROM accounts ORDER BY kind, name`,
 		func(scan scanner) error {
 			var a Account
-			if err := scan(&a.ID, &a.Name, &a.Kind, &a.Currency); err != nil {
+			if err := scan(&a.ID, &a.Name, &a.Kind, &a.Currency, &a.AssetClass); err != nil {
 				return err
 			}
 			l.Accounts = append(l.Accounts, a)
@@ -79,12 +79,12 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 	}
 
 	if err := query(ctx, s.db, `
-        SELECT f.id, f.account_id, a.name, f.name, f.ticker, f.currency
+        SELECT f.id, f.account_id, a.name, f.name, f.ticker, f.currency, f.asset_class
         FROM funds f JOIN accounts a ON a.id = f.account_id
         ORDER BY a.name, f.name`,
 		func(scan scanner) error {
 			var f Fund
-			if err := scan(&f.ID, &f.AccountID, &f.AccountName, &f.Name, &f.Ticker, &f.Currency); err != nil {
+			if err := scan(&f.ID, &f.AccountID, &f.AccountName, &f.Name, &f.Ticker, &f.Currency, &f.AssetClass); err != nil {
 				return err
 			}
 			l.Funds = append(l.Funds, f)
@@ -227,14 +227,6 @@ type AccountValue struct {
 }
 
 func (a AccountValue) HasFunds() bool { return len(a.Positions) > 0 }
-
-// Signed returns the account's contribution to net worth, in the base currency.
-func (a AccountValue) Signed() money.Amount {
-	if a.IsLiability() {
-		return -a.ValueBase
-	}
-	return a.ValueBase
-}
 
 // Valuation is the state of everything on a single date.
 type Valuation struct {
@@ -445,10 +437,14 @@ func (l *Ledger) MissingRates() []string {
 	return out
 }
 
-// convert turns an amount into the base currency at the current rate. Unknown
-// currencies fall back to a rate of 1.
+// convert turns an amount into the base currency at the current rate.
 func (l *Ledger) convert(a money.Amount, currency string) (money.Amount, float64) {
-	rate := l.Rates[currency]
+	return convert(a, currency, l.Rates)
+}
+
+// convert applies the rate for currency, falling back to 1 when unknown.
+func convert(a money.Amount, currency string, rates map[string]float64) (money.Amount, float64) {
+	rate := rates[currency]
 	if rate <= 0 {
 		rate = 1
 	}

@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MrShanks/networh/internal/fx"
-	"github.com/MrShanks/networh/internal/store"
-	"github.com/MrShanks/networh/internal/web"
+	"github.com/MrShanks/networth/internal/fx"
+	"github.com/MrShanks/networth/internal/store"
+	"github.com/MrShanks/networth/internal/web"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func run(addr, dbPath string, log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	handler, err := web.NewServer(db, fx.NewClient(store.Base, store.Foreign()), log)
+	handler, err := web.NewServer(db, fx.NewClient(fx.DefaultEndpoint, store.Base, store.Foreign()), log)
 	if err != nil {
 		return err
 	}

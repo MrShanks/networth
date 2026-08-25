@@ -1,7 +1,7 @@
-// Dashboard widgets: drag by the grip to reorder on the grid, click the minus
-// to collapse. Both are remembered per browser.
+// Widget board: drag by the grip to reorder on the grid, click the minus to
+// collapse. Both are remembered per browser, separately for each page.
 (function () {
-  const KEY = 'networth.board';
+  const KEY = 'networth.board.' + location.pathname;
   const board = document.getElementById('board');
   if (!board) return;
 

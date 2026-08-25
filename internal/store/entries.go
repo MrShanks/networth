@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"sort"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 type scanner func(dest ...any) error

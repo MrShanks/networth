@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 func params() Params {

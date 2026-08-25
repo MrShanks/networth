@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 // Scenario is one way of drawing down the portfolio.
@@ -39,7 +39,7 @@ type RunwayParams struct {
 }
 
 func (p RunwayParams) real() float64 {
-	return ((1+p.ReturnPct/100)/(1+p.InflationPct/100) - 1) * 100
+	return realReturn(p.ReturnPct, p.InflationPct)
 }
 
 // Burn projects the portfolio down to zero under three scenarios, in today's
@@ -50,7 +50,7 @@ func Burn(p RunwayParams) Runway {
 		p.Start = time.Now()
 	}
 
-	monthly := math.Pow(1+p.real()/100, 1.0/12) - 1
+	monthly := monthlyRate(p.real())
 	expenses := float64(p.MonthlyExpenses)
 
 	scenarios := []Scenario{

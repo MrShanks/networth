@@ -1,4 +1,4 @@
-module github.com/MrShanks/networh
+module github.com/MrShanks/networth
 
 go 1.26.4
 

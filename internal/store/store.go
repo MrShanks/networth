@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 const (
@@ -25,6 +25,33 @@ const (
 // Currencies are the currencies the app knows how to handle.
 var Currencies = []string{"CHF", "EUR", "USD"}
 
+// Asset classes group accounts and funds for the allocation and liquidity
+// breakdowns. Cash is the only class counted as liquid.
+const (
+	ClassCash   = "cash"
+	ClassStocks = "stocks"
+	ClassBonds  = "bonds"
+	ClassOther  = "other"
+)
+
+// AssetClasses lists every class, in display order.
+var AssetClasses = []string{ClassCash, ClassStocks, ClassBonds, ClassOther}
+
+var classLabels = map[string]string{
+	ClassCash:   "Cash",
+	ClassStocks: "Stocks",
+	ClassBonds:  "Bonds",
+	ClassOther:  "Other",
+}
+
+// ClassLabel renders an asset class for display, e.g. "cash" -> "Cash".
+func ClassLabel(class string) string {
+	if label, ok := classLabels[class]; ok {
+		return label
+	}
+	return class
+}
+
 // Foreign lists the currencies that need an exchange rate.
 func Foreign() []string {
 	return slices.DeleteFunc(slices.Clone(Currencies), func(c string) bool { return c == Base })
@@ -33,10 +60,11 @@ func Foreign() []string {
 var ErrNotFound = errors.New("not found")
 
 type Account struct {
-	ID       int64
-	Name     string
-	Kind     string
-	Currency string
+	ID         int64
+	Name       string
+	Kind       string
+	Currency   string
+	AssetClass string
 }
 
 func (a Account) IsLiability() bool { return a.Kind == KindLiability }
@@ -49,6 +77,7 @@ type Fund struct {
 	Name        string
 	Ticker      string
 	Currency    string
+	AssetClass  string
 }
 
 // Rate is the value of one unit of Currency expressed in the base currency.
@@ -123,7 +152,10 @@ CREATE INDEX IF NOT EXISTS prices_as_of ON prices(as_of);
 // addedColumns extend the original schema; SQLite has no "ADD COLUMN IF NOT
 // EXISTS", so they are skipped when already present.
 var addedColumns = []struct{ table, column, ddl string }{
-	{"accounts", "currency", "ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'"},
+	{"accounts", "currency", "ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'CHF'"},
+	{"expenses", "kind", "ALTER TABLE expenses ADD COLUMN kind TEXT NOT NULL DEFAULT 'expense'"},
+	{"accounts", "asset_class", "ALTER TABLE accounts ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'cash'"},
+	{"funds", "asset_class", "ALTER TABLE funds ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'stocks'"},
 }
 
 func Open(dsn string) (*Store, error) {
@@ -148,6 +180,14 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(expensesSchema); err != nil {
 		return err
 	}
+	if _, err := db.Exec(rulesSchema); err != nil {
+		return err
+	}
+	// Runs before addedColumns: it relies on the accounts table still having
+	// its original, pre-migration columns to recognise a legacy database.
+	if err := migrateLegacyETFAccounts(db); err != nil {
+		return err
+	}
 	for _, c := range addedColumns {
 		ok, err := hasColumn(db, c.table, c.column)
 		if err != nil {
@@ -159,9 +199,6 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(c.ddl); err != nil {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
-	}
-	if err := migrateLegacyETFAccounts(db); err != nil {
-		return err
 	}
 	if err := migrateSnapshotsToTrades(db); err != nil {
 		return err
@@ -176,9 +213,11 @@ func hasColumn(db *sql.DB, table, column string) (bool, error) {
 }
 
 // migrateLegacyETFAccounts moves the first-generation layout, where an ETF was
-// an account of its own, into the funds tables.
+// an account of its own, into the funds tables. accounts.ticker only ever
+// existed in that generation, so its presence is what flags a legacy database
+// — asset_class is also used by the current schema, and can't be used here.
 func migrateLegacyETFAccounts(db *sql.DB) error {
-	legacy, err := hasColumn(db, "accounts", "asset_class")
+	legacy, err := hasColumn(db, "accounts", "ticker")
 	if err != nil || !legacy {
 		return err
 	}
@@ -311,15 +350,18 @@ func adoptBase(db *sql.DB) error {
 	return nil
 }
 
-func (s *Store) CreateAccount(ctx context.Context, name, kind, currency string) error {
+func (s *Store) CreateAccount(ctx context.Context, name, kind, currency, class string) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)
 	}
 	if err := checkCurrency(currency); err != nil {
 		return err
 	}
+	if err := checkClass(class); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO accounts (name, kind, currency) VALUES (?, ?, ?)`, name, kind, currency)
+		`INSERT INTO accounts (name, kind, currency, asset_class) VALUES (?, ?, ?, ?)`, name, kind, currency, class)
 	return err
 }
 
@@ -327,18 +369,72 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	return s.deleteRow(ctx, `DELETE FROM accounts WHERE id = ?`, id)
 }
 
-func (s *Store) CreateFund(ctx context.Context, accountID int64, name, ticker, currency string) error {
+// SetAccountCurrency changes what currency an account's cash balance is
+// recorded in. It relabels existing balances rather than converting them, so
+// use it to correct a mistaken currency, not to redenominate real money.
+func (s *Store) SetAccountCurrency(ctx context.Context, id int64, currency string) error {
 	if err := checkCurrency(currency); err != nil {
 		return err
 	}
+	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET currency = ? WHERE id = ?`, currency, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAccountClass changes how an account's balance is grouped in the asset
+// allocation and liquidity breakdowns. Use it, for example, to mark an
+// account that is nominally cash but is fully invested (a pension in
+// equities) as stocks rather than cash.
+func (s *Store) SetAccountClass(ctx context.Context, id int64, class string) error {
+	if err := checkClass(class); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET asset_class = ? WHERE id = ?`, class, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CreateFund(ctx context.Context, accountID int64, name, ticker, currency, class string) error {
+	if err := checkCurrency(currency); err != nil {
+		return err
+	}
+	if err := checkClass(class); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO funds (account_id, name, ticker, currency) VALUES (?, ?, ?, ?)`,
-		accountID, name, ticker, currency)
+		`INSERT INTO funds (account_id, name, ticker, currency, asset_class) VALUES (?, ?, ?, ?, ?)`,
+		accountID, name, ticker, currency, class)
 	return err
 }
 
 func (s *Store) DeleteFund(ctx context.Context, id int64) error {
 	return s.deleteRow(ctx, `DELETE FROM funds WHERE id = ?`, id)
+}
+
+// SetFundClass changes how a fund is grouped in the asset allocation
+// breakdown, for example to mark a bond fund as bonds rather than stocks.
+func (s *Store) SetFundClass(ctx context.Context, id int64, class string) error {
+	if err := checkClass(class); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE funds SET asset_class = ? WHERE id = ?`, class, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetBalance records (or overwrites) a cash balance in the account's currency.
@@ -445,6 +541,13 @@ func (s *Store) deleteRow(ctx context.Context, query string, id int64) error {
 func checkCurrency(c string) error {
 	if !slices.Contains(Currencies, c) {
 		return fmt.Errorf("unsupported currency %q", c)
+	}
+	return nil
+}
+
+func checkClass(c string) error {
+	if !slices.Contains(AssetClasses, c) {
+		return fmt.Errorf("unsupported asset class %q", c)
 	}
 	return nil
 }

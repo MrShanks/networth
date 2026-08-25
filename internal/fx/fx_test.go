@@ -19,8 +19,7 @@ func TestRatesInvertsQuotes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("CHF", []string{"EUR", "USD"})
-	c.endpoint = srv.URL
+	c := NewClient(srv.URL, "CHF", []string{"EUR", "USD"})
 
 	rates, err := c.Rates(context.Background())
 	if err != nil {
@@ -50,8 +49,7 @@ func TestRatesFallsBackToCache(t *testing.T) {
 	}))
 	defer fail.Close()
 
-	c := NewClient("CHF", []string{"EUR"})
-	c.endpoint = fail.URL
+	c := NewClient(fail.URL, "CHF", []string{"EUR"})
 	c.cached = &Rates{Base: "CHF", AsOf: "2026-01-01", PerUnit: map[string]float64{"EUR": 0.95}}
 
 	rates, err := c.Rates(context.Background())

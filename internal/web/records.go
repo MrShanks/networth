@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/MrShanks/networh/internal/money"
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 // ranked is one row of a leaderboard.
@@ -28,20 +28,14 @@ type recordsData struct {
 const leaderboardSize = 10
 
 func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
-	ledger, err := s.store.Load(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	expenses, err := s.store.Expenses(r.Context())
+	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 
-	s.rates(r.Context(), ledger)
-	gains := ledger.MonthlyGains()
-	report := store.BuildExpenseReport(expenses, ledger.Rates)
+	gains := v.ledger.MonthlyGains()
+	report := v.report
 
 	best := make([]ranked, 0, len(gains))
 	for _, g := range gains {

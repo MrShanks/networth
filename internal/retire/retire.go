@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/MrShanks/networh/internal/money"
+	"github.com/MrShanks/networth/internal/money"
 )
 
 const (
@@ -29,7 +29,16 @@ type Params struct {
 // RealReturnPct is the growth left once inflation is taken out. Everything is
 // projected with it, so the figures stay in today's money.
 func (p Params) RealReturnPct() float64 {
-	return ((1+p.ReturnPct/100)/(1+p.InflationPct/100) - 1) * 100
+	return realReturn(p.ReturnPct, p.InflationPct)
+}
+
+func realReturn(returnPct, inflationPct float64) float64 {
+	return ((1+returnPct/100)/(1+inflationPct/100) - 1) * 100
+}
+
+// monthlyRate compounds an annual percentage down to a monthly one.
+func monthlyRate(annualPct float64) float64 {
+	return math.Pow(1+annualPct/100, 1.0/12) - 1
 }
 
 // Point is the projected portfolio value at a point in time.
@@ -82,7 +91,7 @@ func Project(p Params) Plan {
 		plan.Target = money.Amount(math.Round(float64(p.MonthlyExpenses) * 12 * 100 / p.WithdrawalPct))
 	}
 
-	monthlyReturn := math.Pow(1+p.RealReturnPct()/100, 1.0/12) - 1
+	monthlyReturn := monthlyRate(p.RealReturnPct())
 	value := float64(p.NetWorth)
 	target := float64(plan.Target)
 	hit := func(v float64) bool { return plan.Target > 0 && v >= target }

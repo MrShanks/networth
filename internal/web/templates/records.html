@@ -12,7 +12,7 @@
           <td class="barcell">
             <span class="share {{$.Tone}}" style="width: {{printf "%.0f" .Share}}%"></span>
           </td>
-          <td class="num {{$.Tone}}">{{.Amount}} {{$.Base}}</td>
+          <td class="num {{$.Tone}}">{{.Amount}}</td>
         </tr>
       {{end}}
       </tbody>
@@ -39,28 +39,43 @@
     <a class="current" href="/records">Records</a>
     <a href="/retire">Retirement</a>
   </nav>
-  <p class="sub">Your best and worst months, in {{.Base}}.</p>
+  <p class="sub">
+    Your best and worst months, in {{.Base}}.
+    <button type="button" class="link" id="reset-layout">Reset layout</button>
+  </p>
 </header>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
 
-<section class="panel">
-  <h2>Best months for investments</h2>
-  {{template "leaderboard" dict "Rows" .BestGains "Base" .Base "Tone" "up"
-    "Empty" "No month has gained yet — record fund prices over time to see this."}}
+<div class="board" id="board">
+
+<section class="widget" data-widget="best-gains" data-span="1">
+  {{template "widgethead" "Best months for investments"}}
+  <div class="widget-body">
+    {{template "leaderboard" dict "Rows" .BestGains "Base" .Base "Tone" "up"
+      "Empty" "No month has gained yet — record fund prices over time to see this."}}
+  </div>
 </section>
 
-<section class="panel">
-  <h2>Worst months for investments</h2>
-  {{template "leaderboard" dict "Rows" .WorstGains "Base" .Base "Tone" "down"
-    "Empty" "No losing month so far."}}
+<section class="widget" data-widget="worst-gains" data-span="1">
+  {{template "widgethead" "Worst months for investments"}}
+  <div class="widget-body">
+    {{template "leaderboard" dict "Rows" .WorstGains "Base" .Base "Tone" "down"
+      "Empty" "No losing month so far."}}
+  </div>
 </section>
 
-<section class="panel">
-  <h2>Worst months for spending</h2>
-  {{template "leaderboard" dict "Rows" .TopSpending "Base" .Base "Tone" "down"
-    "Empty" "No expenses recorded yet."}}
-  <p class="empty small">Money paid into funds is not counted here — only what you spent.</p>
+<section class="widget" data-widget="top-spending" data-span="1">
+  {{template "widgethint" dict "Title" "Worst months for spending" "Hint"
+    "Money paid into funds is not counted here — only what you spent."}}
+  <div class="widget-body">
+    {{template "leaderboard" dict "Rows" .TopSpending "Base" .Base "Tone" "down"
+      "Empty" "No expenses recorded yet."}}
+  </div>
 </section>
+
+</div>
+
+<script src="/static/board.js"></script>
 </body>
 </html>{{end}}

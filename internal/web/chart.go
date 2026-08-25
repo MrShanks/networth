@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MrShanks/networh/internal/store"
+	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/store"
 )
 
 const (
@@ -80,19 +81,19 @@ func plot(points []datedValue, extra ...series) Chart {
 		return c
 	}
 
-	min, max := points[0].value, points[0].value
+	lo, hi := points[0].value, points[0].value
 	for _, p := range points {
-		min = minf(min, p.value)
-		max = maxf(max, p.value)
+		lo = min(lo, p.value)
+		hi = max(hi, p.value)
 	}
 	for _, s := range extra {
 		for _, v := range s.values {
-			min = minf(min, v)
-			max = maxf(max, v)
+			lo = min(lo, v)
+			hi = max(hi, v)
 		}
 	}
-	if max == min {
-		max, min = max+1, min-1
+	if hi == lo {
+		hi, lo = hi+1, lo-1
 	}
 
 	plotW := float64(chartWidth - 2*chartPadX)
@@ -105,7 +106,7 @@ func plot(points []datedValue, extra ...series) Chart {
 		return chartPadX + plotW*float64(i)/float64(len(points)-1)
 	}
 	yAt := func(v float64) float64 {
-		return chartPadY + plotH*(1-(v-min)/(max-min))
+		return chartPadY + plotH*(1-(v-lo)/(hi-lo))
 	}
 
 	var line strings.Builder
@@ -135,7 +136,7 @@ func plot(points []datedValue, extra ...series) Chart {
 	}
 
 	for i := 0; i <= 4; i++ {
-		v := min + (max-min)*float64(i)/4
+		v := lo + (hi-lo)*float64(i)/4
 		c.YTicks = append(c.YTicks, chartLabel{
 			X:    chartPadX,
 			Y:    yAt(v),
@@ -143,7 +144,7 @@ func plot(points []datedValue, extra ...series) Chart {
 		})
 	}
 
-	step := max2(1, len(points)/6)
+	step := max(1, len(points)/6)
 	for i := 0; i < len(points); i += step {
 		c.XTicks = append(c.XTicks, chartLabel{X: xAt(i), Y: chartHeight - 4, Text: points[i].date})
 	}
@@ -157,23 +158,32 @@ const (
 
 // sparkPoints renders a fund's value history as polyline coordinates.
 func sparkPoints(history []store.ValuePoint) string {
-	if len(history) < 2 {
+	values := make([]money.Amount, len(history))
+	for i, p := range history {
+		values[i] = p.Value
+	}
+	return sparkAmounts(values)
+}
+
+// sparkAmounts renders a series of amounts as polyline coordinates.
+func sparkAmounts(values []money.Amount) string {
+	if len(values) < 2 {
 		return ""
 	}
 
-	min, max := history[0].Value.Float(), history[0].Value.Float()
-	for _, s := range history {
-		min = minf(min, s.Value.Float())
-		max = maxf(max, s.Value.Float())
+	lo, hi := values[0].Float(), values[0].Float()
+	for _, v := range values {
+		lo = min(lo, v.Float())
+		hi = max(hi, v.Float())
 	}
-	if max == min {
-		max, min = max+1, min-1
+	if hi == lo {
+		hi, lo = hi+1, lo-1
 	}
 
 	var b strings.Builder
-	for i, s := range history {
-		x := sparkWidth * float64(i) / float64(len(history)-1)
-		y := 2 + (sparkHeight-4)*(1-(s.Value.Float()-min)/(max-min))
+	for i, v := range values {
+		x := sparkWidth * float64(i) / float64(len(values)-1)
+		y := 2 + (sparkHeight-4)*(1-(v.Float()-lo)/(hi-lo))
 		fmt.Fprintf(&b, "%.1f,%.1f ", x, y)
 	}
 	return strings.TrimSpace(b.String())
@@ -192,25 +202,4 @@ func shortNumber(v float64) string {
 	default:
 		return fmt.Sprintf("%.0f", v)
 	}
-}
-
-func minf(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxf(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func max2(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

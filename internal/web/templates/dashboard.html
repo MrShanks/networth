@@ -26,6 +26,18 @@
   </header>
 {{end}}
 
+{{define "widgethint"}}
+  <header class="widget-head">
+    <h2>{{.Title}} {{template "hint" .Hint}}</h2>
+    <div class="widget-tools">
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+{{end}}
+
+{{define "hint"}}<button type="button" class="hint" data-tip="{{.}}" aria-label="{{.}}"></button>{{end}}
+
 {{define "dashboard.html"}}<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -44,9 +56,13 @@
     <a href="/retire">Retirement</a>
   </nav>
   <p class="sub">
-    Everything is reported in {{.Base}}, converted at the current rate.
+    All amounts in {{.Base}}.
     <button type="button" class="link" id="reset-layout">Reset layout</button>
   </p>
+  <div class="toolbar">
+    <button type="button" class="pill-btn" onclick="fundsDialog.showModal()">Funds</button>
+    <button type="button" class="pill-btn" onclick="accountsDialog.showModal()">Accounts</button>
+  </div>
 </header>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
@@ -58,12 +74,12 @@
 <div class="board" id="board">
 
   <section class="widget" data-widget="summary" data-span="2">
-    {{template "widgethead" "Summary"}}
+    {{template "widgethead" (printf "Summary (%s)" .Base)}}
     <div class="widget-body">
       <div class="cards">
         <div class="card">
           <span class="label">Net worth</span>
-          <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}} {{.Base}}</strong>
+          <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}}</strong>
           {{if .HasChange}}
             <span class="delta {{if lt .Change 0}}down{{else}}up{{end}}">
               {{if ge .Change 0}}+{{end}}{{.Change}} since last entry
@@ -72,23 +88,61 @@
         </div>
         <div class="card">
           <span class="label">Assets</span>
-          <strong class="value up">{{.Now.Assets}} {{.Base}}</strong>
+          <strong class="value up">{{.Now.Assets}}</strong>
         </div>
         <div class="card">
           <span class="label">Liabilities</span>
-          <strong class="value down">{{.Now.Liabilities}} {{.Base}}</strong>
+          <strong class="value down">{{.Now.Liabilities}}</strong>
         </div>
         {{if .Now.Positions}}
         <div class="card">
           <span class="label">Funds</span>
-          <strong class="value">{{.Now.MarketBase}} {{.Base}}</strong>
+          <strong class="value">{{.Now.MarketBase}}</strong>
           <span class="delta {{if lt .Now.GainBase 0}}down{{else}}up{{end}}">
             {{if ge .Now.GainBase 0}}+{{end}}{{.Now.GainBase}} ({{printf "%+.1f" .Now.GainPct}}%)
             on {{.Now.InvestedBase}} invested
           </span>
         </div>
         {{end}}
+        {{if .Liquidity.Total}}
+          <div class="card">
+            <span class="label">Liquid</span>
+            <strong class="value up">{{.Liquidity.Liquid}}</strong>
+            <span class="empty small">{{printf "%.0f" .Liquidity.Pct}}% of assets</span>
+          </div>
+          <div class="card">
+            <span class="label">Not liquid</span>
+            <strong class="value">{{.Liquidity.Illiquid}}</strong>
+            <span class="empty small">{{printf "%.0f" .Liquidity.IlliquidPct}}% of assets</span>
+          </div>
+        {{else}}
+          <p class="empty">Record a balance to see this.</p>
+        {{end}}
       </div>
+    </div>
+  </section>
+
+  <section class="widget" data-widget="allocation" data-span="1">
+    {{template "widgethead" "Asset allocation"}}
+    <div class="widget-body">
+      {{if .Allocation.Classes}}
+        <table>
+          <tbody>
+          {{range .Allocation.Classes}}
+            <tr>
+              <td><span class="pill class-{{.Class}}">{{.Label}}</span></td>
+              <td class="barcell">
+                <span class="share" style="width: {{printf "%.0f" .Share}}%"></span>
+              </td>
+              <td class="num">{{.Total}}</td>
+              <td class="num empty small">{{printf "%.0f" .Share}}%</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      {{else}}
+        <p class="empty">Record a balance to see this.</p>
+      {{end}}
     </div>
   </section>
 
@@ -122,126 +176,32 @@
 
   {{if not .InvestChart.Empty}}
   <section class="widget" data-widget="chart-funds" data-span="2">
-    {{template "widgethead" "Funds: value vs invested"}}
+    {{template "widgethint" dict "Title" "Funds: value vs invested" "Hint"
+      "Solid line: market value. Dashed line: money paid in. A step up means you bought more; the gap between the lines is your growth."}}
     <div class="widget-body">
       {{template "linechart" .InvestChart}}
-      <p class="empty small">
-        <span class="key value"></span> market value
-        <span class="key invested"></span> money paid in — a step up means you bought more,
-        the gap between the lines is your growth.
-      </p>
     </div>
   </section>
   {{end}}
 
-  <section class="widget" data-widget="funds" data-span="1">
-    {{template "widgethead" "Funds"}}
-    <div class="widget-body">
-      <h3>Update a fund</h3>
-      {{if .Funds}}
-        <form method="post" action="/fund-updates" class="stack">
-          <label>Fund
-            <select name="fund_id" required>
-              {{range .Funds}}
-                <option value="{{.ID}}">{{.AccountName}} · {{.Name}} ({{.Currency}})</option>
-              {{end}}
-            </select>
-          </label>
-          <label>Price per unit
-            <input type="text" name="price" inputmode="decimal" placeholder="87.40" required>
-          </label>
-          <label>Units traded
-            <input type="text" name="units" inputmode="decimal" placeholder="leave empty">
-            <small class="empty">only when you bought or sold: 12.5 to buy, -4 to sell,
-              at the price above</small>
-          </label>
-          <label>Date
-            <input type="date" name="as_of" value="{{.Today}}" required>
-          </label>
-          <button type="submit">Save</button>
-        </form>
-      {{else}}
-        <p class="empty">Add a fund below first.</p>
-      {{end}}
-
-      <h3>Add a fund</h3>
-      {{if .Accounts}}
-        <form method="post" action="/funds" class="stack">
-          <label>Held in
-            <select name="account_id" required>
-              {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-            </select>
-          </label>
-          <label>Name
-            <input type="text" name="name" placeholder="FTSE All-World" required maxlength="80">
-          </label>
-          <label>Ticker
-            <input type="text" name="ticker" placeholder="VWCE" maxlength="12">
-          </label>
-          <label>Currency
-            <select name="currency">
-              {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
-            </select>
-          </label>
-          <button type="submit">Add fund</button>
-        </form>
-      {{else}}
-        <p class="empty">Create an account first.</p>
-      {{end}}
-    </div>
-  </section>
-
-  <section class="widget" data-widget="accounts" data-span="1">
-    {{template "widgethead" "Accounts"}}
-    <div class="widget-body">
-      <h3>Record a cash balance</h3>
-      {{if .Accounts}}
-        <form method="post" action="/balances" class="stack">
-          <label>Account
-            <select name="account_id" required>
-              {{range .Accounts}}<option value="{{.ID}}">{{.Name}} ({{.Currency}})</option>{{end}}
-            </select>
-          </label>
-          <label>Amount (account currency)
-            <input type="text" name="amount" inputmode="decimal" placeholder="1234.56" required>
-          </label>
-          <label>Date
-            <input type="date" name="as_of" value="{{.Today}}" required>
-          </label>
-          <button type="submit">Save balance</button>
-        </form>
-      {{else}}
-        <p class="empty">Create an account below first.</p>
-      {{end}}
-
-      <h3>Add an account</h3>
-      <form method="post" action="/accounts" class="stack">
-        <label>Name
-          <input type="text" name="name" placeholder="Degiro" required maxlength="80">
-        </label>
-        <label>Type
-          <select name="kind">
-            <option value="asset">Asset</option>
-            <option value="liability">Liability</option>
-          </select>
-        </label>
-        <label>Cash currency
-          <select name="currency">
-            {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
-          </select>
-        </label>
-        <button type="submit">Add account</button>
-      </form>
-    </div>
-  </section>
-
   {{range .Now.Accounts}}
+  {{$acc := .}}
   <section class="widget" data-widget="account-{{.ID}}" data-span="2">
     <header class="widget-head">
       <h2>
         {{.Name}}
         <span class="pill {{.Kind}}">{{.Kind}}</span>
-        <span class="pill cur">{{.Currency}}</span>
+        <form class="pill-form" method="post" action="/accounts/{{.ID}}/currency">
+          <select name="currency" class="pill cur" onchange="this.form.requestSubmit()">
+            {{range $.Currencies}}<option value="{{.}}"{{if eq . $acc.Currency}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </form>
+        <form class="pill-form" method="post" action="/accounts/{{.ID}}/class">
+          <select name="class" class="pill class-{{.AssetClass}}" onchange="this.form.requestSubmit()"
+                  title="How this account's cash is counted in liquidity and asset allocation">
+            {{range $.AssetClasses}}<option value="{{.}}"{{if eq . $acc.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}
+          </select>
+        </form>
       </h2>
       <div class="widget-tools">
         <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
@@ -252,17 +212,17 @@
       <div class="row">
         <div>
           <span class="label">Cash</span>
-          <strong>{{.Cash}} {{.Currency}}</strong>
+          <strong>{{.Cash}}</strong>
           {{if .CashAsOf}}<span class="empty small">as of {{.CashAsOf}}</span>
           {{else}}<span class="empty small">no balance recorded</span>{{end}}
         </div>
         <div>
           <span class="label">Account total</span>
-          <strong>{{.ValueBase}} {{$.Base}}</strong>
+          <strong>{{.ValueBase}}{{if ne .Currency $.Base}} {{$.Base}}{{end}}</strong>
         </div>
-        <form method="post" action="/accounts/{{.ID}}/delete"
+          <form class="account-delete" method="post" action="/accounts/{{.ID}}/delete"
               onsubmit="return confirm('Delete {{.Name}} with all its funds and history?')">
-          <button class="link danger" type="submit">Delete account</button>
+          <button class="icon danger" type="submit" aria-label="Delete account" title="Delete account">&#128465;</button>
         </form>
       </div>
 
@@ -277,20 +237,28 @@
           </thead>
           <tbody>
           {{range .Positions}}
+          {{$pos := .}}
             <tr>
               <td>
                 {{.Name}}
                 {{with .Ticker}}<span class="pill etf">{{.}}</span>{{end}}
+                <span class="pill cur">{{.Currency}}</span>
+                <form class="pill-form" method="post" action="/funds/{{.ID}}/class">
+                  <select name="class" class="pill class-{{.AssetClass}}" onchange="this.form.requestSubmit()"
+                          title="How this fund is counted in asset allocation">
+                    {{range $.AssetClasses}}<option value="{{.}}"{{if eq . $pos.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}
+                  </select>
+                </form>
                 <div class="empty small">as of {{.AsOf}}</div>
               </td>
               <td class="num">{{printf "%.4g" .Units}}</td>
-              <td class="num">{{.Price}} {{.Currency}}</td>
-              <td class="num">{{.AvgCost}} {{.Currency}}</td>
+              <td class="num">{{.Price}}</td>
+              <td class="num">{{.AvgCost}}</td>
               <td class="num">
-                {{.Value}} {{.Currency}}
+                {{.Value}}
                 {{if ne .Currency $.Base}}<div class="empty small">{{.ValueBase}} {{$.Base}}</div>{{end}}
               </td>
-              <td class="num">{{.Invested}} {{.Currency}}</td>
+              <td class="num">{{.Invested}}</td>
               <td class="num {{if lt .Gain 0}}down{{else}}up{{end}}">
                 {{if ge .Gain 0}}+{{end}}{{.Gain}}
                 <div class="small">{{printf "%+.1f" .GainPct}}%</div>
@@ -305,7 +273,7 @@
               <td class="num">
                 <form method="post" action="/funds/{{.ID}}/delete"
                       onsubmit="return confirm('Delete {{.Name}} and its history?')">
-                  <button class="link danger" type="submit">Delete</button>
+                  <button class="icon danger" type="submit" aria-label="Delete fund" title="Delete fund">&#128465;</button>
                 </form>
               </td>
             </tr>
@@ -338,12 +306,12 @@
               <td><span class="pill {{.Kind}}">{{.Kind}}</span></td>
               <td>{{.Name}}</td>
               <td class="num">
-                {{.Amount}} {{.Currency}}
+                <span class="{{if eq .Kind "income"}}up{{else}}down{{end}}">{{if eq .Kind "income"}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}</span>
                 {{if .Units}}<div class="empty small">{{printf "%.4g" .Units}} &times; {{.Price}}</div>{{end}}
               </td>
               <td class="num">
                 <form method="post" action="{{.Path}}/{{.ID}}/delete">
-                  <button class="link danger" type="submit">Delete</button>
+                  <button class="icon danger" type="submit" aria-label="Delete entry" title="Delete entry">&#128465;</button>
                 </form>
               </td>
             </tr>
@@ -357,6 +325,121 @@
   </section>
 
 </div>
+
+<dialog id="fundsDialog" class="modal">
+  <header class="modal-head">
+    <h2>Funds</h2>
+    <button type="button" class="icon" onclick="fundsDialog.close()" aria-label="Close">&times;</button>
+  </header>
+  <div class="modal-body">
+    <h3>Update a fund</h3>
+    {{if .Funds}}
+      <form method="post" action="/fund-updates" class="stack">
+        <label>Fund
+          <select name="fund_id" required>
+            {{range .Funds}}
+              <option value="{{.ID}}">{{.AccountName}} · {{.Name}} ({{.Currency}})</option>
+            {{end}}
+          </select>
+        </label>
+        <label>Price per unit
+          <input type="text" name="price" inputmode="decimal" placeholder="87.40" required>
+        </label>
+        <label><span>Units traded {{template "hint" "Only if you bought or sold: 12.5 to buy, -4 to sell, at the price above."}}</span>
+          <input type="text" name="units" inputmode="decimal" placeholder="leave empty">
+        </label>
+        <label>Date
+          <input type="date" name="as_of" value="{{.Today}}" required>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+    {{else}}
+      <p class="empty">Add a fund below first.</p>
+    {{end}}
+
+    <h3>Add a fund</h3>
+    {{if .Accounts}}
+      <form method="post" action="/funds" class="stack">
+        <label>Held in
+          <select name="account_id" required>
+            {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+          </select>
+        </label>
+        <label>Name
+          <input type="text" name="name" placeholder="FTSE All-World" required maxlength="80">
+        </label>
+        <label>Ticker
+          <input type="text" name="ticker" placeholder="VWCE" maxlength="12">
+        </label>
+        <label>Currency
+          <select name="currency">
+            {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <label><span>Class {{template "hint" "How the fund is grouped in asset allocation, e.g. a bond ETF should be Bonds rather than the default Stocks."}}</span>
+          <select name="class">
+            {{range .AssetClasses}}<option value="{{.}}"{{if eq . "stocks"}} selected{{end}}>{{classLabel .}}</option>{{end}}
+          </select>
+        </label>
+        <button type="submit">Add fund</button>
+      </form>
+    {{else}}
+      <p class="empty">Create an account first.</p>
+    {{end}}
+  </div>
+</dialog>
+
+<dialog id="accountsDialog" class="modal">
+  <header class="modal-head">
+    <h2>Accounts</h2>
+    <button type="button" class="icon" onclick="accountsDialog.close()" aria-label="Close">&times;</button>
+  </header>
+  <div class="modal-body">
+    <h3>Record a cash balance</h3>
+    {{if .Accounts}}
+      <form method="post" action="/balances" class="stack">
+        <label>Account
+          <select name="account_id" required>
+            {{range .Accounts}}<option value="{{.ID}}">{{.Name}} ({{.Currency}})</option>{{end}}
+          </select>
+        </label>
+        <label>Amount (account currency)
+          <input type="text" name="amount" inputmode="decimal" placeholder="1234.56" required>
+        </label>
+        <label>Date
+          <input type="date" name="as_of" value="{{.Today}}" required>
+        </label>
+        <button type="submit">Save balance</button>
+      </form>
+    {{else}}
+      <p class="empty">Create an account below first.</p>
+    {{end}}
+
+    <h3>Add an account</h3>
+    <form method="post" action="/accounts" class="stack">
+      <label>Name
+        <input type="text" name="name" placeholder="Degiro" required maxlength="80">
+      </label>
+      <label>Type
+        <select name="kind">
+          <option value="asset">Asset</option>
+          <option value="liability">Liability</option>
+        </select>
+      </label>
+      <label>Cash currency
+        <select name="currency">
+          {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label><span>Class {{template "hint" "How this account's balance is counted in liquidity and asset allocation. Cash is liquid; pick something else for a balance you consider invested, such as a pension held in equities."}}</span>
+        <select name="class">
+          {{range .AssetClasses}}<option value="{{.}}"{{if eq . "cash"}} selected{{end}}>{{classLabel .}}</option>{{end}}
+        </select>
+      </label>
+      <button type="submit">Add account</button>
+    </form>
+  </div>
+</dialog>
 
 <script src="/static/board.js"></script>
 <script>
