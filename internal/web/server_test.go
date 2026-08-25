@@ -358,6 +358,66 @@ func TestFixAccountCurrency(t *testing.T) {
 	}
 }
 
+func TestResetDashboardChangeUntilNextEntry(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{"name": {"UBS"}, "kind": {"asset"}, "currency": {"CHF"}})
+	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
+	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"150"}, "as_of": {"2026-02-01"}})
+
+	if page := get(t, srv, "/"); !strings.Contains(page, "since last entry") {
+		t.Fatal("dashboard did not show a change before reset")
+	}
+
+	post(t, srv, "/dashboard/change/reset", nil)
+	if page := get(t, srv, "/"); strings.Contains(page, "since last entry") {
+		t.Fatal("dashboard still showed the dismissed change")
+	}
+
+	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"175"}, "as_of": {"2026-03-01"}})
+	if page := get(t, srv, "/"); !strings.Contains(page, "since last entry") {
+		t.Fatal("dashboard did not show the change after a newer entry")
+	}
+}
+
+func TestDashboardResetWindowsChartHistories(t *testing.T) {
+	netWorth := []store.Point{
+		{Date: "2026-01-01"},
+		{Date: "2026-02-01"},
+		{Date: "2026-03-01"},
+	}
+	if got := historySince(netWorth, "2026-03-01"); len(got) != 1 || got[0].Date != "2026-03-01" {
+		t.Errorf("historySince reset = %+v, want only current point", got)
+	}
+
+	funds := []store.ValuePoint{
+		{AsOf: "2026-01-01"},
+		{AsOf: "2026-02-01"},
+		{AsOf: "2026-03-01"},
+	}
+	if got := investHistorySince(funds, "2026-03-01"); len(got) != 1 || got[0].AsOf != "2026-03-01" {
+		t.Errorf("investHistorySince reset = %+v, want only current point", got)
+	}
+
+	if got := historySince(netWorth, "2026-02-01"); len(got) != 2 {
+		t.Errorf("historySince newer entry has %d points, want reset point plus newer point", len(got))
+	}
+	if got := investHistorySince(funds, "2026-02-01"); len(got) != 2 {
+		t.Errorf("investHistorySince newer entry has %d points, want reset point plus newer point", len(got))
+	}
+}
+
+func TestNetWorthCurrencyConversion(t *testing.T) {
+	if got, ok := inCurrency(10000, 0.8); !ok || got != 12500 {
+		t.Errorf("inCurrency(100 CHF, 0.8) = %s, %v; want 125.00, true", got, ok)
+	}
+	if got, ok := inCurrency(-10000, 0.8); !ok || got != -12500 {
+		t.Errorf("inCurrency(-100 CHF, 0.8) = %s, %v; want -125.00, true", got, ok)
+	}
+	if _, ok := inCurrency(10000, 0); ok {
+		t.Error("inCurrency with a missing rate reported success")
+	}
+}
+
 func TestAccountClassMovesBalanceOutOfLiquidity(t *testing.T) {
 	srv := newTestServer(t)
 	post(t, srv, "/accounts", url.Values{"name": {"Viac"}, "kind": {"asset"}, "currency": {"CHF"}})

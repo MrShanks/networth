@@ -96,7 +96,7 @@
     <button type="button" class="icon" onclick="entryDialog.close()" aria-label="Close">&times;</button>
   </header>
   <div class="modal-body">
-    <form method="post" action="/expenses" class="stack">
+    <form method="post" action="/expenses" class="stack modal-form">
       <label>Kind
         <select name="kind">
           <option value="expense">Expense</option>
@@ -111,19 +111,19 @@
           {{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}
         </select>
       </label>
-      <label>Category
+      <label class="wide">Category
         <input type="text" name="new_category" list="categories" placeholder="Groceries" required maxlength="40">
         <datalist id="categories">
           {{range .Categories}}<option value="{{.}}"></option>{{end}}
         </datalist>
       </label>
-      <label>Note
+      <label class="wide">Note
         <input type="text" name="note" placeholder="optional" maxlength="120">
       </label>
       <label>Date
         <input type="date" name="as_of" value="{{.Today}}" required>
       </label>
-      <button type="submit">Add entry</button>
+      <button class="modal-action" type="submit">Add entry</button>
     </form>
   </div>
 </dialog>
@@ -134,16 +134,16 @@
     <button type="button" class="icon" onclick="importDialog.close()" aria-label="Close">&times;</button>
   </header>
   <div class="modal-body">
-    <form method="post" action="/expenses/import" enctype="multipart/form-data" class="stack">
-      <label><span>CSV export {{template "hint" "The account or card column is ignored."}}</span>
+    <form method="post" action="/expenses/import" enctype="multipart/form-data" class="stack modal-form">
+      <label class="wide"><span>CSV export {{template "hint" "The account or card column is ignored."}}</span>
         <input type="file" name="file" accept=".csv,text/csv" required>
       </label>
-      <label class="check">
+      <label class="check wide">
         <input type="checkbox" name="transfers">
         Also import transfers and investments
         <span class="hint" data-tip="Off by default: card payments and money moved to a broker are not spending."></span>
       </label>
-      <button type="submit">Import</button>
+      <button class="modal-action" type="submit">Import</button>
     </form>
   </div>
 </dialog>
@@ -220,6 +220,7 @@
           <button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button>
         </form>
       {{end}}
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
       <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
       <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
     </div>
@@ -262,14 +263,14 @@
     <button type="button" class="icon" onclick="rulesDialog.close()" aria-label="Close">&times;</button>
   </header>
   <div class="modal-body">
-    <form method="post" action="/rules" class="stack">
-      <label>When the description contains
+    <form method="post" action="/rules" class="stack modal-form">
+      <label class="wide">When the description contains
         <input type="text" name="pattern" placeholder="IHLY THOMAS" required maxlength="80">
       </label>
-      <label>Put it in
+      <label class="wide">Put it in
         <input type="text" name="new_category" list="categories" placeholder="Rent" required maxlength="40">
       </label>
-      <button type="submit">Save rule</button>
+      <button class="modal-action" type="submit">Save rule</button>
     </form>
     {{if .Rules}}
       <table class="tight">

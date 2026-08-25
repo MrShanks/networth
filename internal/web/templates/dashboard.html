@@ -20,6 +20,7 @@
   <header class="widget-head">
     <h2>{{.}}</h2>
     <div class="widget-tools">
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
       <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
       <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
     </div>
@@ -30,6 +31,7 @@
   <header class="widget-head">
     <h2>{{.Title}} {{template "hint" .Hint}}</h2>
     <div class="widget-tools">
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
       <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
       <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
     </div>
@@ -79,11 +81,20 @@
       <div class="cards">
         <div class="card">
           <span class="label">Net worth</span>
-          <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}}</strong>
+          <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}} CHF</strong>
+          {{if or .HasEUR .HasUSD}}
+            <div class="networth-foreign">
+              {{if .HasEUR}}<span>{{.NetWorthEUR}} EUR</span>{{end}}
+              {{if .HasUSD}}<span>{{.NetWorthUSD}} USD</span>{{end}}
+            </div>
+          {{end}}
           {{if .HasChange}}
             <span class="delta {{if lt .Change 0}}down{{else}}up{{end}}">
               {{if ge .Change 0}}+{{end}}{{.Change}} since last entry
             </span>
+            <form class="change-reset" method="post" action="/dashboard/change/reset">
+              <button class="link" type="submit" title="Reset comparison" aria-label="Reset net worth comparison">Reset</button>
+            </form>
           {{end}}
         </div>
         <div class="card">
@@ -146,7 +157,7 @@
     </div>
   </section>
 
-  <section class="widget" data-widget="rates" data-span="2">
+  <section class="widget" data-widget="rates" data-span="1">
     {{template "widgethead" "Exchange rates"}}
     <div class="widget-body">
       <div class="quotes" id="quotes">
@@ -186,7 +197,7 @@
 
   {{range .Now.Accounts}}
   {{$acc := .}}
-  <section class="widget" data-widget="account-{{.ID}}" data-span="2">
+  <section class="widget" data-widget="account-{{.ID}}" data-span="{{if .HasFunds}}4{{else}}2{{end}}">
     <header class="widget-head">
       <h2>
         {{.Name}}
@@ -204,6 +215,7 @@
         </form>
       </h2>
       <div class="widget-tools">
+        <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
         <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
         <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
       </div>
@@ -306,7 +318,7 @@
               <td><span class="pill {{.Kind}}">{{.Kind}}</span></td>
               <td>{{.Name}}</td>
               <td class="num">
-                <span class="{{if eq .Kind "income"}}up{{else}}down{{end}}">{{if eq .Kind "income"}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}</span>
+                <span class="{{if eq .Kind "bought"}}down{{else if eq .Kind "sold"}}up{{end}}">{{if eq .Kind "bought"}}-{{else if eq .Kind "sold"}}+{{end}}{{absAmount .Amount}} {{.Currency}}</span>
                 {{if .Units}}<div class="empty small">{{printf "%.4g" .Units}} &times; {{.Price}}</div>{{end}}
               </td>
               <td class="num">
@@ -334,8 +346,8 @@
   <div class="modal-body">
     <h3>Update a fund</h3>
     {{if .Funds}}
-      <form method="post" action="/fund-updates" class="stack">
-        <label>Fund
+      <form method="post" action="/fund-updates" class="stack modal-form">
+        <label class="wide">Fund
           <select name="fund_id" required>
             {{range .Funds}}
               <option value="{{.ID}}">{{.AccountName}} · {{.Name}} ({{.Currency}})</option>
@@ -351,7 +363,7 @@
         <label>Date
           <input type="date" name="as_of" value="{{.Today}}" required>
         </label>
-        <button type="submit">Save</button>
+        <button class="modal-action" type="submit">Save update</button>
       </form>
     {{else}}
       <p class="empty">Add a fund below first.</p>
@@ -359,13 +371,13 @@
 
     <h3>Add a fund</h3>
     {{if .Accounts}}
-      <form method="post" action="/funds" class="stack">
-        <label>Held in
+      <form method="post" action="/funds" class="stack modal-form">
+        <label class="wide">Held in
           <select name="account_id" required>
             {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
           </select>
         </label>
-        <label>Name
+        <label class="wide">Name
           <input type="text" name="name" placeholder="FTSE All-World" required maxlength="80">
         </label>
         <label>Ticker
@@ -381,7 +393,7 @@
             {{range .AssetClasses}}<option value="{{.}}"{{if eq . "stocks"}} selected{{end}}>{{classLabel .}}</option>{{end}}
           </select>
         </label>
-        <button type="submit">Add fund</button>
+        <button class="modal-action" type="submit">Add fund</button>
       </form>
     {{else}}
       <p class="empty">Create an account first.</p>
@@ -397,8 +409,8 @@
   <div class="modal-body">
     <h3>Record a cash balance</h3>
     {{if .Accounts}}
-      <form method="post" action="/balances" class="stack">
-        <label>Account
+      <form method="post" action="/balances" class="stack modal-form">
+        <label class="wide">Account
           <select name="account_id" required>
             {{range .Accounts}}<option value="{{.ID}}">{{.Name}} ({{.Currency}})</option>{{end}}
           </select>
@@ -409,15 +421,15 @@
         <label>Date
           <input type="date" name="as_of" value="{{.Today}}" required>
         </label>
-        <button type="submit">Save balance</button>
+        <button class="modal-action" type="submit">Save balance</button>
       </form>
     {{else}}
       <p class="empty">Create an account below first.</p>
     {{end}}
 
     <h3>Add an account</h3>
-    <form method="post" action="/accounts" class="stack">
-      <label>Name
+    <form method="post" action="/accounts" class="stack modal-form">
+      <label class="wide">Name
         <input type="text" name="name" placeholder="Degiro" required maxlength="80">
       </label>
       <label>Type
@@ -436,7 +448,7 @@
           {{range .AssetClasses}}<option value="{{.}}"{{if eq . "cash"}} selected{{end}}>{{classLabel .}}</option>{{end}}
         </select>
       </label>
-      <button type="submit">Add account</button>
+      <button class="modal-action" type="submit">Add account</button>
     </form>
   </div>
 </dialog>

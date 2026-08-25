@@ -1,5 +1,5 @@
-// Widget board: drag by the grip to reorder on the grid, click the minus to
-// collapse. Both are remembered per browser, separately for each page.
+// Widget board: reorder, collapse, and choose a standard width. The layout is
+// remembered per browser, separately for each page.
 (function () {
   const KEY = 'networth.board.' + location.pathname;
   const board = document.getElementById('board');
@@ -20,6 +20,7 @@
     const state = {
       order: widgets().map(idOf),
       collapsed: widgets().filter((w) => w.classList.contains('collapsed')).map(idOf),
+      spans: Object.fromEntries(widgets().map((w) => [idOf(w), Number(w.dataset.span) || 1])),
     };
     localStorage.setItem(KEY, JSON.stringify(state));
   }
@@ -33,7 +34,21 @@
       if (widget) board.appendChild(widget); // known ones first, in saved order
     });
     (state.collapsed || []).forEach((id) => byID.get(id)?.classList.add('collapsed'));
+    Object.entries(state.spans || {}).forEach(([id, span]) => {
+      if (byID.has(id) && [1, 2, 4].includes(span)) byID.get(id).dataset.span = span;
+    });
   }
+
+  // Widths snap to the board's standard column spans.
+  board.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-resize]');
+    if (!button) return;
+    const widget = button.closest('.widget');
+    const current = Number(widget.dataset.span) || 1;
+    widget.dataset.span = current === 1 ? 2 : current === 2 ? 4 : 1;
+    button.setAttribute('aria-label', `Change width; currently ${widget.dataset.span} columns`);
+    save();
+  });
 
   // Collapsing.
   board.addEventListener('click', (e) => {

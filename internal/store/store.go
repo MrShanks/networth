@@ -350,6 +350,29 @@ func adoptBase(db *sql.DB) error {
 	return nil
 }
 
+// DashboardChangeReset returns the latest history date whose change indicator
+// the user dismissed.
+func (s *Store) DashboardChangeReset(ctx context.Context) (string, error) {
+	var date string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM settings WHERE key = 'dashboard_change_reset'`).Scan(&date)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return date, err
+}
+
+// SetDashboardChangeReset dismisses the change indicator through date.
+func (s *Store) SetDashboardChangeReset(ctx context.Context, date string) error {
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return errors.New("invalid reset date")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value) VALUES ('dashboard_change_reset', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, date)
+	return err
+}
+
 func (s *Store) CreateAccount(ctx context.Context, name, kind, currency, class string) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)

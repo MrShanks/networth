@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -80,6 +81,7 @@ func sameSite(r *http.Request) bool {
 func (s *Server) routes() {
 	s.mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
 	s.mux.HandleFunc("GET /{$}", s.handleDashboard)
+	s.mux.HandleFunc("POST /dashboard/change/reset", s.handleResetDashboardChange)
 	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/currency", s.handleSetAccountCurrency)
@@ -127,6 +129,10 @@ type dashboardData struct {
 	Now          store.Valuation
 	Allocation   store.Allocation
 	Liquidity    store.Liquidity
+	NetWorthEUR  money.Amount
+	NetWorthUSD  money.Amount
+	HasEUR       bool
+	HasUSD       bool
 	Change       money.Amount
 	HasChange    bool
 	Accounts     []store.Account
@@ -149,6 +155,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	ledger := v.ledger
 
 	history := ledger.History()
+	investHistory := ledger.InvestHistory()
+	reset, err := s.store.DashboardChangeReset(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	now := ledger.At("")
 	data := dashboardData{
 		Base:         store.Base,
@@ -162,17 +174,68 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Entries:      ledger.Entries(50),
 		FX:           v.fx,
 		MissingRates: ledger.MissingRates(),
-		Chart:        buildChart(history),
-		InvestChart:  buildInvestChart(ledger.InvestHistory()),
+		Chart:        buildChart(historySince(history, reset)),
+		InvestChart:  buildInvestChart(investHistorySince(investHistory, reset)),
 		Today:        time.Now().Format("2006-01-02"),
 		Error:        r.URL.Query().Get("err"),
 	}
+	data.NetWorthEUR, data.HasEUR = inCurrency(now.NetWorth(), ledger.Rates["EUR"])
+	data.NetWorthUSD, data.HasUSD = inCurrency(now.NetWorth(), ledger.Rates["USD"])
 	if n := len(history); n >= 2 {
-		data.Change = history[n-1].NetWorth() - history[n-2].NetWorth()
-		data.HasChange = true
+		if history[n-1].Date > reset {
+			data.Change = history[n-1].NetWorth() - history[n-2].NetWorth()
+			data.HasChange = true
+		}
 	}
 
 	s.render(w, "dashboard.html", data)
+}
+
+func inCurrency(chf money.Amount, chfPerUnit float64) (money.Amount, bool) {
+	if chfPerUnit <= 0 {
+		return 0, false
+	}
+	return money.Amount(math.Round(float64(chf) / chfPerUnit)), true
+}
+
+func historySince(points []store.Point, date string) []store.Point {
+	if date == "" {
+		return points
+	}
+	for i, point := range points {
+		if point.Date >= date {
+			return points[i:]
+		}
+	}
+	return nil
+}
+
+func investHistorySince(points []store.ValuePoint, date string) []store.ValuePoint {
+	if date == "" {
+		return points
+	}
+	for i, point := range points {
+		if point.AsOf >= date {
+			return points[i:]
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleResetDashboardChange(w http.ResponseWriter, r *http.Request) {
+	v, err := s.load(r.Context())
+	if err != nil {
+		s.redirect(w, r, err.Error())
+		return
+	}
+	history := v.ledger.History()
+	if len(history) > 0 {
+		if err := s.store.SetDashboardChangeReset(r.Context(), history[len(history)-1].Date); err != nil {
+			s.redirect(w, r, err.Error())
+			return
+		}
+	}
+	s.redirect(w, r, "")
 }
 
 func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
