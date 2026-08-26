@@ -62,6 +62,7 @@ var ErrNotFound = errors.New("not found")
 type Account struct {
 	ID         int64
 	Name       string
+	Owner      string
 	Kind       string
 	Currency   string
 	AssetClass string
@@ -155,6 +156,7 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"accounts", "currency", "ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'CHF'"},
 	{"expenses", "kind", "ALTER TABLE expenses ADD COLUMN kind TEXT NOT NULL DEFAULT 'expense'"},
 	{"accounts", "asset_class", "ALTER TABLE accounts ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'cash'"},
+	{"accounts", "owner", "ALTER TABLE accounts ADD COLUMN owner TEXT NOT NULL DEFAULT ''"},
 	{"funds", "asset_class", "ALTER TABLE funds ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'stocks'"},
 }
 
@@ -199,6 +201,12 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(c.ddl); err != nil {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
+	}
+	if _, err := db.Exec(`
+		UPDATE expenses SET kind = 'tax'
+		WHERE kind = 'expense'
+		  AND lower(trim(category)) IN ('tax', 'taxes', 'tax payment', 'tax payments', 'taxes & authorities')`); err != nil {
+		return fmt.Errorf("migrate tax payments: %w", err)
 	}
 	if err := migrateSnapshotsToTrades(db); err != nil {
 		return err
@@ -373,7 +381,7 @@ func (s *Store) SetDashboardChangeReset(ctx context.Context, date string) error 
 	return err
 }
 
-func (s *Store) CreateAccount(ctx context.Context, name, kind, currency, class string) error {
+func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, class string) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)
 	}
@@ -384,7 +392,7 @@ func (s *Store) CreateAccount(ctx context.Context, name, kind, currency, class s
 		return err
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO accounts (name, kind, currency, asset_class) VALUES (?, ?, ?, ?)`, name, kind, currency, class)
+		`INSERT INTO accounts (name, owner, kind, currency, asset_class) VALUES (?, ?, ?, ?, ?)`, name, owner, kind, currency, class)
 	return err
 }
 
@@ -400,6 +408,18 @@ func (s *Store) SetAccountCurrency(ctx context.Context, id int64, currency strin
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET currency = ? WHERE id = ?`, currency, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAccountOwner changes the person used to group an account on the dashboard.
+func (s *Store) SetAccountOwner(ctx context.Context, id int64, owner string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET owner = ? WHERE id = ?`, owner, id)
 	if err != nil {
 		return err
 	}

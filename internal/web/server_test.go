@@ -141,6 +141,169 @@ func TestDashboardShowsConvertedTotals(t *testing.T) {
 	}
 }
 
+func TestDashboardGroupsAccountsByOwner(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "owner": {"Sam, Alex, Sam"}, "kind": {"asset"}, "currency": {"CHF"},
+	})
+	post(t, srv, "/balances", url.Values{
+		"account_id": {"1"}, "amount": {"1000"}, "as_of": {"2026-01-01"},
+	})
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Card"}, "owner": {"Sam"}, "kind": {"liability"}, "currency": {"CHF"},
+	})
+	post(t, srv, "/balances", url.Values{
+		"account_id": {"2"}, "amount": {"200"}, "as_of": {"2026-01-01"},
+	})
+
+	body := get(t, srv, "/")
+	overview := body[strings.Index(body, `data-widget="owners"`):]
+	overview = overview[:strings.Index(overview, "</section>")]
+	for _, want := range []string{"Total", "800.00", "Alex", "500.00", "Sam", "300.00"} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("owner overview does not contain %q", want)
+		}
+	}
+	if strings.Index(overview, "Total") > strings.Index(overview, "Alex") {
+		t.Error("combined total should be displayed above the individual owners")
+	}
+
+	post(t, srv, "/accounts/1/owner", url.Values{"owner": {"Alex"}})
+	post(t, srv, "/accounts/2/owner", url.Values{"owner": {"Alex"}})
+	body = get(t, srv, "/")
+	overview = body[strings.Index(body, `data-widget="owners"`):]
+	overview = overview[:strings.Index(overview, "</section>")]
+	if strings.Contains(overview, ">Sam<") || strings.Count(overview, ">Alex<") != 1 {
+		t.Error("editing an owner should regroup the account")
+	}
+}
+
+func TestExpenseSummarySeparatesTaxPayments(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"},
+		"new_category": {"Groceries"}, "as_of": {"2026-08-01"},
+	})
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"25"}, "currency": {"CHF"},
+		"new_category": {"Taxes"}, "as_of": {"2026-08-02"},
+	})
+
+	body := get(t, srv, "/expenses?month=2026-08")
+	summary := body[strings.Index(body, `data-widget="summary-year"`):]
+	summary = summary[:strings.Index(summary, "</section>")]
+	if !strings.Contains(summary, `2026 summary (CHF)`) ||
+		!strings.Contains(summary, `class="value down">25.00</strong>`) {
+		t.Error("tax payments are not displayed as a red summary value")
+	}
+	if !strings.Contains(summary, `class="value">100.00</strong>`) {
+		t.Error("monthly spending should exclude tax payments")
+	}
+	if !strings.Contains(body, `data-widget="summary-month"`) ||
+		!strings.Contains(body, `August 2026 summary (CHF)`) {
+		t.Error("latest month summary is missing")
+	}
+	body = get(t, srv, "/expenses?month=2025-08&year=2026")
+	if !strings.Contains(body, `name="month" value="2025-08"`) ||
+		!strings.Contains(body, `2025 summary (CHF)`) || strings.Contains(body, `name="year"`) {
+		t.Error("the selected month should be the only control and determine the summary year")
+	}
+}
+
+func TestExpenseCategoryDrillDown(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"10"}, "currency": {"CHF"}, "new_category": {"Food & drink"}, "note": {"July lunch"}, "as_of": {"2026-07-01"}},
+		{"kind": {"expense"}, "amount": {"20"}, "currency": {"CHF"}, "new_category": {"Food & drink"}, "note": {"August dinner"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"30"}, "currency": {"CHF"}, "new_category": {"Travel"}, "note": {"Train"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	body := get(t, srv, "/expenses?month=2026-08")
+	if strings.Contains(body, "%2526") {
+		t.Error("category ampersand was double encoded")
+	}
+	if !strings.Contains(body, `class="category-link" href="/expenses?month=2026-08`) ||
+		!strings.Contains(body, `#entries">Food &amp; drink</a>`) {
+		t.Error("month category is not linked to its entries")
+	}
+	if !strings.Contains(body, `class="category-link" href="/expenses?category=`) ||
+		!strings.Contains(body, `scope=all#entries">Food &amp; drink</a>`) {
+		t.Error("all-time category is not linked to its entries")
+	}
+
+	month := get(t, srv, "/expenses?month=2026-08&category=Food+%26+drink")
+	if !strings.Contains(month, "August dinner") || strings.Contains(month, "July lunch") || strings.Contains(month, "Train") {
+		t.Error("month category drill-down did not filter entries correctly")
+	}
+
+	all := get(t, srv, "/expenses?category=Food+%26+drink&scope=all")
+	if !strings.Contains(all, "August dinner") || !strings.Contains(all, "July lunch") || strings.Contains(all, "Train") {
+		t.Error("all-time category drill-down did not filter entries correctly")
+	}
+}
+
+func TestExpenseCategoryCanBeReassigned(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"25"}, "currency": {"CHF"},
+		"new_category": {"Other"}, "note": {"Quarterly bill"}, "as_of": {"2026-08-02"},
+	})
+
+	form := url.Values{"category": {"Taxes"}, "month": {"2026-08"}}
+	req := httptest.NewRequest(http.MethodPost, "/expenses/1/category", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if got, want := rec.Header().Get("Location"), "/expenses?month=2026-08#entries"; got != want {
+		t.Fatalf("redirect = %q, want %q", got, want)
+	}
+
+	body := get(t, srv, "/expenses?month=2026-08")
+	if !strings.Contains(body, `<option value="Taxes" selected>Taxes</option>`) {
+		t.Error("reassigned category is not selected in the entries table")
+	}
+	if !strings.Contains(body, `class="pill entry-category liability"`) {
+		t.Error("reassigned tax entry is not rendered as tax")
+	}
+}
+
+func TestExpenseMonthComparison(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"}, "new_category": {"Groceries"}, "as_of": {"2026-07-01"}},
+		{"kind": {"expense"}, "amount": {"150"}, "currency": {"CHF"}, "new_category": {"Groceries"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"30"}, "currency": {"CHF"}, "new_category": {"Travel"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	body := get(t, srv, "/expenses?month=2026-08")
+	if !strings.Contains(body, `id="month-comparison"`) {
+		t.Error("comparison widget is missing its navigation anchor")
+	}
+	comparison := body[strings.Index(body, `data-widget="month-comparison"`):]
+	comparison = comparison[:strings.Index(comparison, "</section>")]
+	for _, want := range []string{
+		`action="/expenses#month-comparison"`,
+		`name="compare_a" value="2026-07"`,
+		`name="compare_b" value="2026-08"`,
+		`<td class="num down">+80.00</td>`,
+		"Groceries", "Travel",
+	} {
+		if !strings.Contains(comparison, want) {
+			t.Errorf("comparison does not contain %q", want)
+		}
+	}
+
+	body = get(t, srv, "/expenses?month=2026-08&compare_a=2026-08&compare_b=2026-07")
+	if !strings.Contains(body, `name="compare_a" value="2026-08"`) ||
+		!strings.Contains(body, `name="compare_b" value="2026-07"`) {
+		t.Error("explicit comparison months were not preserved")
+	}
+}
+
 func TestAccountWidgetDoesNotRepeatItsOwnCurrency(t *testing.T) {
 	srv := newTestServer(t)
 	// A CHF account: the currency selector already says CHF, so neither Cash

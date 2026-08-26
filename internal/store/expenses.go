@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,6 +16,7 @@ import (
 const (
 	KindExpense = "expense"
 	KindIncome  = "income"
+	KindTax     = "tax"
 )
 
 // Expense is a single cash flow record, in its own currency. A negative amount
@@ -35,6 +37,9 @@ func (e Expense) IsRefund() bool { return e.Kind != KindIncome && e.Amount < 0 }
 // IsIncome reports whether this entry is money coming in.
 func (e Expense) IsIncome() bool { return e.Kind == KindIncome }
 
+// IsTax reports whether this entry is a tax payment kept outside spending.
+func (e Expense) IsTax() bool { return e.Kind == KindTax }
+
 // Month is the YYYY-MM the entry belongs to.
 func (e Expense) Month() string { return e.AsOf[:7] }
 
@@ -53,7 +58,7 @@ CREATE INDEX IF NOT EXISTS expenses_as_of ON expenses(as_of);
 
 // AddEntry records money spent or earned.
 func (s *Store) AddEntry(ctx context.Context, kind, asOf, category, note, currency string, amount money.Amount) error {
-	if kind != KindExpense && kind != KindIncome {
+	if kind != KindExpense && kind != KindIncome && kind != KindTax {
 		return fmt.Errorf("unknown entry kind %q", kind)
 	}
 	if err := checkDate(asOf); err != nil {
@@ -66,6 +71,7 @@ func (s *Store) AddEntry(ctx context.Context, kind, asOf, category, note, curren
 	if category == "" {
 		return errors.New("category is required")
 	}
+	kind = classifyEntry(kind, category)
 	if amount == 0 {
 		return errors.New("amount cannot be zero")
 	}
@@ -77,6 +83,36 @@ func (s *Store) AddEntry(ctx context.Context, kind, asOf, category, note, curren
 
 func (s *Store) DeleteExpense(ctx context.Context, id int64) error {
 	return s.deleteRow(ctx, `DELETE FROM expenses WHERE id = ?`, id)
+}
+
+// SetExpenseCategory moves one entry to another category and keeps its tax kind
+// in sync. Income remains income regardless of category.
+func (s *Store) SetExpenseCategory(ctx context.Context, id int64, category string) error {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return errors.New("category is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var kind string
+	if err := tx.QueryRowContext(ctx, `SELECT kind FROM expenses WHERE id = ?`, id).Scan(&kind); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if kind != KindIncome {
+		kind = classifyEntry(KindExpense, category)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE expenses SET category = ?, kind = ? WHERE id = ?`, category, kind, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // DeleteExpensesForMonth removes every entry in a YYYY-MM month.
@@ -116,6 +152,7 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 	defer tx.Rollback()
 
 	for _, row := range rows {
+		row.Kind = classifyEntry(row.Kind, row.Category)
 		if k := key(row); seen[k] > 0 {
 			seen[k]--
 			duplicates++
@@ -166,12 +203,13 @@ type ExpenseMonth struct {
 	Total      money.Amount // spending, net of refunds, in the base currency
 	Refunds    money.Amount // what came back, as a positive number
 	Income     money.Amount
+	Taxes      money.Amount
 	Categories []CategoryTotal
 	Expenses   []Expense // every entry of the month, newest first
 }
 
 // Saved is what was left of the month's income.
-func (m ExpenseMonth) Saved() money.Amount { return m.Income - m.Total }
+func (m ExpenseMonth) Saved() money.Amount { return m.Income - m.Total - m.Taxes }
 
 // SavedPct is the share of income that was not spent.
 func (m ExpenseMonth) SavedPct() float64 {
@@ -187,6 +225,20 @@ type ExpenseReport struct {
 	Total   money.Amount
 	Income  money.Amount
 	Average money.Amount // spending per month with any entries
+}
+
+// Year returns the combined cash flow for one calendar year.
+func (r ExpenseReport) Year(year string) ExpenseMonth {
+	total := ExpenseMonth{Month: year}
+	for _, month := range r.Months {
+		if strings.HasPrefix(month.Month, year) {
+			total.Total += month.Total
+			total.Refunds += month.Refunds
+			total.Income += month.Income
+			total.Taxes += month.Taxes
+		}
+	}
+	return total
 }
 
 // RecentAverage is the average monthly spending over the last n months that
@@ -351,6 +403,10 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			m.Income += amount
 			continue // income is not spending, and has no place in the categories
 		}
+		if classifyEntry(e.Kind, e.Category) == KindTax {
+			m.Taxes += amount
+			continue // taxes are tracked separately from ordinary spending
+		}
 		m.Total += amount
 		if amount < 0 {
 			m.Refunds -= amount
@@ -384,4 +440,23 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		report.Average = report.Total / money.Amount(n)
 	}
 	return report
+}
+
+func isTaxCategory(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "tax", "taxes", "tax payment", "tax payments", "taxes & authorities":
+		return true
+	default:
+		return false
+	}
+}
+
+func classifyEntry(kind, category string) string {
+	if kind == KindIncome {
+		return kind
+	}
+	if kind == KindTax || isTaxCategory(category) {
+		return KindTax
+	}
+	return KindExpense
 }

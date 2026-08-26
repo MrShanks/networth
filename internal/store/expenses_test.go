@@ -1,6 +1,7 @@
 package store
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/MrShanks/networth/internal/money"
@@ -129,6 +130,99 @@ func TestIncomeGivesTheMonthsSaving(t *testing.T) {
 	}
 	if got, want := report.RecentSavedMonths(12), 1; got != want {
 		t.Errorf("RecentSavedMonths(12) = %d, want %d", got, want)
+	}
+}
+
+func TestTaxesAreSeparateFromSpending(t *testing.T) {
+	expenses := append(testExpenses(),
+		Expense{ID: 5, AsOf: "2026-08-20", Category: "Tax payments", Currency: "CHF", Amount: 50000},
+		Expense{ID: 6, Kind: KindIncome, AsOf: "2026-08-25", Category: "Salary", Currency: "CHF", Amount: 500000},
+	)
+	report := BuildExpenseReport(expenses, map[string]float64{"CHF": 1, "USD": 0.8})
+
+	august, _ := report.Find("2026-08")
+	if got, want := august.Taxes, money.Amount(50000); got != want {
+		t.Errorf("taxes = %s, want %s", got, want)
+	}
+	if got, want := august.Total, money.Amount(216000); got != want {
+		t.Errorf("spending = %s, want %s without taxes", got, want)
+	}
+	if got, want := august.Saved(), money.Amount(234000); got != want {
+		t.Errorf("Saved() = %s, want %s after spending and taxes", got, want)
+	}
+	year := report.Year("2026")
+	if got, want := year.Taxes, money.Amount(50000); got != want {
+		t.Errorf("Year().Taxes = %s, want %s", got, want)
+	}
+	if got, want := year.Saved(), money.Amount(222000); got != want {
+		t.Errorf("Year().Saved() = %s, want %s", got, want)
+	}
+	for _, category := range august.Categories {
+		if category.Category == "Tax payments" {
+			t.Error("tax payments turned up as a spending category")
+		}
+	}
+}
+
+func TestOpenMigratesExistingTaxPayments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "live.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, err = store.db.Exec(`
+		INSERT INTO expenses (kind, as_of, category, note, currency, cents)
+		VALUES ('expense', '2026-08-20', 'Taxes & authorities', 'existing live data', 'CHF', 50000)`)
+	if err != nil {
+		t.Fatalf("seed existing expense: %v", err)
+	}
+	store.Close()
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen with migration: %v", err)
+	}
+	defer store.Close()
+	expenses, err := store.Expenses(t.Context())
+	if err != nil {
+		t.Fatalf("Expenses: %v", err)
+	}
+	if len(expenses) != 1 || expenses[0].Kind != KindTax {
+		t.Fatalf("existing entry after migration = %+v, want kind %q", expenses, KindTax)
+	}
+}
+
+func TestSetExpenseCategoryKeepsKindInSync(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "categories.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	for _, kind := range []string{KindExpense, KindIncome} {
+		if err := store.AddEntry(t.Context(), kind, "2026-08-01", "Other", kind, "CHF", 1000); err != nil {
+			t.Fatalf("AddEntry(%s): %v", kind, err)
+		}
+	}
+	if err := store.SetExpenseCategory(t.Context(), 1, "Taxes"); err != nil {
+		t.Fatalf("move expense to Taxes: %v", err)
+	}
+	if err := store.SetExpenseCategory(t.Context(), 2, "Taxes"); err != nil {
+		t.Fatalf("move income to Taxes: %v", err)
+	}
+	expenses, err := store.Expenses(t.Context())
+	if err != nil {
+		t.Fatalf("Expenses: %v", err)
+	}
+	if expenses[0].Kind != KindIncome || expenses[1].Kind != KindTax {
+		t.Fatalf("kinds after moving to Taxes = %q, %q", expenses[0].Kind, expenses[1].Kind)
+	}
+	if err := store.SetExpenseCategory(t.Context(), 1, "Groceries"); err != nil {
+		t.Fatalf("move tax to Groceries: %v", err)
+	}
+	expenses, _ = store.Expenses(t.Context())
+	if expenses[1].Kind != KindExpense {
+		t.Errorf("kind after moving out of Taxes = %q, want %q", expenses[1].Kind, KindExpense)
 	}
 }
 

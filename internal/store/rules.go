@@ -75,8 +75,12 @@ func (s *Store) Recategorise(ctx context.Context, rule Rule) (int, error) {
 		if e.Category == rule.Category || !rule.Matches(e.Note) {
 			continue
 		}
+		kind := classifyEntry(e.Kind, rule.Category)
+		if e.Kind == KindTax && !isTaxCategory(rule.Category) {
+			kind = KindExpense
+		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE expenses SET category = ? WHERE id = ?`, rule.Category, e.ID); err != nil {
+			`UPDATE expenses SET category = ?, kind = ? WHERE id = ?`, rule.Category, kind, e.ID); err != nil {
 			return 0, err
 		}
 		moved++
@@ -90,6 +94,7 @@ func Categorise(rows []Expense, rules []Rule) []Expense {
 		for _, rule := range rules {
 			if rule.Matches(row.Note) {
 				rows[i].Category = rule.Category
+				rows[i].Kind = classifyEntry(row.Kind, rule.Category)
 				break
 			}
 		}

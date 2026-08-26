@@ -133,6 +133,28 @@
     </div>
   </section>
 
+  {{if .Owners}}
+  <section class="widget" data-widget="owners" data-span="1">
+    {{template "widgethead" (printf "Owners (%s)" .Base)}}
+    <div class="widget-body">
+      <div class="row">
+        <span class="label">Total</span>
+        <strong class="value {{if lt .Now.NetWorth 0}}down{{end}}">{{.Now.NetWorth}}</strong>
+      </div>
+      <table>
+        <tbody>
+          {{range .Owners}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td class="num {{if lt .Total 0}}down{{end}}">{{.Total}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {{end}}
+
   <section class="widget" data-widget="allocation" data-span="1">
     {{template "widgethead" "Asset allocation"}}
     <div class="widget-body">
@@ -201,6 +223,11 @@
     <header class="widget-head">
       <h2>
         {{.Name}}
+        <form class="pill-form" method="post" action="/accounts/{{.ID}}/owner">
+             <input name="owner" class="pill" value="{{.Owner}}" placeholder="Owners"
+               aria-label="Account owners, separated by commas" title="Separate co-owners with commas"
+               maxlength="160" onchange="this.form.requestSubmit()">
+        </form>
         <span class="pill {{.Kind}}">{{.Kind}}</span>
         <form class="pill-form" method="post" action="/accounts/{{.ID}}/currency">
           <select name="currency" class="pill cur" onchange="this.form.requestSubmit()">
@@ -431,6 +458,9 @@
     <form method="post" action="/accounts" class="stack modal-form">
       <label class="wide">Name
         <input type="text" name="name" placeholder="Degiro" required maxlength="80">
+      </label>
+      <label class="wide"><span>Owners {{template "hint" "Separate co-owners with commas. The account value is split evenly between them in the overview."}}</span>
+        <input type="text" name="owner" placeholder="Alex, Sam" maxlength="160">
       </label>
       <label>Type
         <select name="kind">

@@ -66,10 +66,10 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 		prices: map[int64][]PriceMark{},
 	}
 
-	if err := query(ctx, s.db, `SELECT id, name, kind, currency, asset_class FROM accounts ORDER BY kind, name`,
+	if err := query(ctx, s.db, `SELECT id, name, owner, kind, currency, asset_class FROM accounts ORDER BY owner, kind, name`,
 		func(scan scanner) error {
 			var a Account
-			if err := scan(&a.ID, &a.Name, &a.Kind, &a.Currency, &a.AssetClass); err != nil {
+			if err := scan(&a.ID, &a.Name, &a.Owner, &a.Kind, &a.Currency, &a.AssetClass); err != nil {
 				return err
 			}
 			l.Accounts = append(l.Accounts, a)

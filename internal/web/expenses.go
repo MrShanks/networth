@@ -1,8 +1,11 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,12 @@ type expensesData struct {
 	Currencies []string
 	Report     store.ExpenseReport
 	Month      store.ExpenseMonth
+	Latest     store.ExpenseMonth
+	Year       store.ExpenseMonth
+	Comparison monthComparison
+	Entries    []store.Expense
+	EntryTitle string
+	Category   string
 	Known      bool
 	Categories []string
 	ByCategory []store.CategorySummary
@@ -24,6 +33,19 @@ type expensesData struct {
 	Today      string
 	Notice     string
 	Error      string
+}
+
+type monthComparison struct {
+	Left       store.ExpenseMonth
+	Right      store.ExpenseMonth
+	Categories []categoryComparison
+}
+
+type categoryComparison struct {
+	Category string
+	Left     money.Amount
+	Right    money.Amount
+	Change   money.Amount
 }
 
 func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +57,22 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 
 	report := v.report
 	month, known := report.Find(r.URL.Query().Get("month"))
+	comparison := compareMonths(report, r.URL.Query().Get("compare_a"), r.URL.Query().Get("compare_b"), month.Month)
+	year := time.Now().Format("2006")
+	if len(month.Month) >= 4 {
+		year = month.Month[:4]
+	}
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	entries := month.Expenses
+	entryTitle := monthName(month.Month) + " entries"
+	if category != "" {
+		entries = filterExpenses(month.Expenses, category)
+		entryTitle = monthName(month.Month) + " · " + category
+		if r.URL.Query().Get("scope") == "all" {
+			entries = filterReportExpenses(report, category)
+			entryTitle = "All entries · " + category
+		}
+	}
 
 	rules, err := s.store.Rules(r.Context())
 	if err != nil {
@@ -47,6 +85,12 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 		Currencies: store.Currencies,
 		Report:     report,
 		Month:      month,
+		Latest:     month,
+		Year:       report.Year(year),
+		Comparison: comparison,
+		Entries:    entries,
+		EntryTitle: entryTitle,
+		Category:   category,
 		Known:      known,
 		Categories: report.UsedCategories(),
 		ByCategory: report.ByCategory(),
@@ -56,6 +100,59 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 		Notice:     r.URL.Query().Get("msg"),
 		Error:      r.URL.Query().Get("err"),
 	})
+}
+
+func compareMonths(report store.ExpenseReport, left, right, selected string) monthComparison {
+	if right == "" {
+		right = selected
+	}
+	if left == "" {
+		if parsed, err := time.Parse("2006-01", right); err == nil {
+			left = parsed.AddDate(0, -1, 0).Format("2006-01")
+		}
+	}
+	leftMonth, _ := report.Find(left)
+	rightMonth, _ := report.Find(right)
+
+	byCategory := make(map[string]*categoryComparison)
+	for _, category := range leftMonth.Categories {
+		byCategory[category.Category] = &categoryComparison{Category: category.Category, Left: category.Total}
+	}
+	for _, category := range rightMonth.Categories {
+		row := byCategory[category.Category]
+		if row == nil {
+			row = &categoryComparison{Category: category.Category}
+			byCategory[category.Category] = row
+		}
+		row.Right = category.Total
+	}
+	comparison := monthComparison{Left: leftMonth, Right: rightMonth}
+	for _, row := range byCategory {
+		row.Change = row.Right - row.Left
+		comparison.Categories = append(comparison.Categories, *row)
+	}
+	slices.SortFunc(comparison.Categories, func(a, b categoryComparison) int {
+		return cmp.Compare(max(b.Left, b.Right), max(a.Left, a.Right))
+	})
+	return comparison
+}
+
+func filterExpenses(expenses []store.Expense, category string) []store.Expense {
+	var filtered []store.Expense
+	for _, expense := range expenses {
+		if strings.EqualFold(expense.Category, category) {
+			filtered = append(filtered, expense)
+		}
+	}
+	return filtered
+}
+
+func filterReportExpenses(report store.ExpenseReport, category string) []store.Expense {
+	var filtered []store.Expense
+	for i := len(report.Months) - 1; i >= 0; i-- {
+		filtered = append(filtered, filterExpenses(report.Months[i].Expenses, category)...)
+	}
+	return filtered
 }
 
 func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
@@ -70,8 +167,8 @@ func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := store.KindExpense
-	if r.FormValue("kind") == store.KindIncome {
-		kind = store.KindIncome
+	if requested := r.FormValue("kind"); requested == store.KindIncome || requested == store.KindTax {
+		kind = requested
 	}
 
 	err = s.store.AddEntry(r.Context(), kind, s.date(r), category,
@@ -94,6 +191,25 @@ func (s *Server) handleDeleteExpense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirectTo(w, r, "/expenses", "")
+}
+
+func (s *Server) handleSetExpenseCategory(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err == nil {
+		err = s.store.SetExpenseCategory(r.Context(), id, r.FormValue("category"))
+	}
+	values := url.Values{}
+	if month := r.FormValue("month"); month != "" {
+		values.Set("month", month)
+	}
+	if err != nil {
+		values.Set("err", err.Error())
+	}
+	target := "/expenses"
+	if query := values.Encode(); query != "" {
+		target += "?" + query
+	}
+	http.Redirect(w, r, target+"#entries", http.StatusSeeOther)
 }
 
 func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {

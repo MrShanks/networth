@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,12 +39,15 @@ func absAmount(amount money.Amount) money.Amount {
 	return amount
 }
 
+func subAmount(a, b money.Amount) money.Amount { return a - b }
+
 func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"spark":      sparkPoints,
 		"trend":      sparkAmounts,
 		"monthName":  monthName,
 		"absAmount":  absAmount,
+		"subAmount":  subAmount,
 		"dict":       dict,
 		"classLabel": store.ClassLabel,
 	}).ParseFS(assets, "templates/*.html")
@@ -85,6 +89,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/currency", s.handleSetAccountCurrency)
+	s.mux.HandleFunc("POST /accounts/{id}/owner", s.handleSetAccountOwner)
 	s.mux.HandleFunc("POST /accounts/{id}/class", s.handleSetAccountClass)
 	s.mux.HandleFunc("POST /funds", s.handleCreateFund)
 	s.mux.HandleFunc("POST /funds/{id}/delete", s.handleDeleteFund)
@@ -97,6 +102,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/rates", s.handleRatesAPI)
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
 	s.mux.HandleFunc("POST /expenses", s.handleAddExpense)
+	s.mux.HandleFunc("POST /expenses/{id}/category", s.handleSetExpenseCategory)
 	s.mux.HandleFunc("POST /expenses/{id}/delete", s.handleDeleteExpense)
 	s.mux.HandleFunc("POST /expenses/month/{month}/delete", s.handleDeleteMonth)
 	s.mux.HandleFunc("POST /rules", s.handleAddRule)
@@ -127,6 +133,7 @@ type dashboardData struct {
 	Currencies   []string
 	AssetClasses []string
 	Now          store.Valuation
+	Owners       []ownerTotal
 	Allocation   store.Allocation
 	Liquidity    store.Liquidity
 	NetWorthEUR  money.Amount
@@ -144,6 +151,11 @@ type dashboardData struct {
 	InvestChart  Chart
 	Today        string
 	Error        string
+}
+
+type ownerTotal struct {
+	Name  string
+	Total money.Amount
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +179,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Currencies:   store.Currencies,
 		AssetClasses: store.AssetClasses,
 		Now:          now,
+		Owners:       ownerTotals(now),
 		Allocation:   now.Allocation(),
 		Liquidity:    now.Liquidity(),
 		Accounts:     ledger.Accounts,
@@ -189,6 +202,57 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "dashboard.html", data)
+}
+
+func ownerTotals(v store.Valuation) []ownerTotal {
+	totals := make(map[string]money.Amount)
+	for _, account := range v.Accounts {
+		owners := ownerNames(account.Owner)
+		value := account.ValueBase
+		if account.IsLiability() {
+			value = -value
+		}
+		share, remainder := value/money.Amount(len(owners)), value%money.Amount(len(owners))
+		for i, owner := range owners {
+			totals[owner] += share
+			if money.Amount(i) < remainder {
+				totals[owner]++
+			} else if money.Amount(-i) > remainder {
+				totals[owner]--
+			}
+		}
+	}
+	owners := make([]ownerTotal, 0, len(totals))
+	for name, total := range totals {
+		owners = append(owners, ownerTotal{Name: name, Total: total})
+	}
+	slices.SortFunc(owners, func(a, b ownerTotal) int { return strings.Compare(a.Name, b.Name) })
+	return owners
+}
+
+func ownerNames(raw string) []string {
+	seen := make(map[string]bool)
+	var owners []string
+	for _, part := range strings.Split(raw, ",") {
+		owner := strings.TrimSpace(part)
+		if owner != "" && !seen[owner] {
+			owners = append(owners, owner)
+			seen[owner] = true
+		}
+	}
+	if len(owners) == 0 {
+		return []string{"Unassigned"}
+	}
+	slices.Sort(owners)
+	return owners
+}
+
+func normalizeOwners(raw string) string {
+	owners := ownerNames(raw)
+	if len(owners) == 1 && owners[0] == "Unassigned" {
+		return ""
+	}
+	return strings.Join(owners, ", ")
 }
 
 func inCurrency(chf money.Amount, chfPerUnit float64) (money.Amount, bool) {
@@ -248,9 +312,22 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if class == "" {
 		class = store.ClassCash
 	}
-	err := s.store.CreateAccount(r.Context(), name, r.FormValue("kind"), r.FormValue("currency"), class)
+	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("kind"), r.FormValue("currency"), class)
 	if err != nil {
 		s.redirect(w, r, "could not add account: "+err.Error())
+		return
+	}
+	s.redirect(w, r, "")
+}
+
+func (s *Server) handleSetAccountOwner(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirect(w, r, "invalid id")
+		return
+	}
+	if err := s.store.SetAccountOwner(r.Context(), id, normalizeOwners(r.FormValue("owner"))); err != nil {
+		s.redirect(w, r, err.Error())
 		return
 	}
 	s.redirect(w, r, "")

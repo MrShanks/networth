@@ -7,14 +7,21 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Expenses</h1>
-  <nav>
-    <a href="/">Net worth</a>
-    <a class="current" href="/expenses">Expenses</a>
-    <a href="/records">Records</a>
-    <a href="/retire">Retirement</a>
-  </nav>
+<header class="page-head">
+  <div>
+    <h1>Expenses</h1>
+    <nav>
+      <a href="/">Net worth</a>
+      <a class="current" href="/expenses">Expenses</a>
+      <a href="/records">Records</a>
+      <a href="/retire">Retirement</a>
+    </nav>
+  </div>
+  <form class="month-picker" method="get" action="/expenses">
+    <label><span>Viewing</span>
+      <input type="month" name="month" value="{{.Month.Month}}" onchange="this.form.requestSubmit()">
+    </label>
+  </form>
   <p class="sub">
     Monthly spending, totalled in {{.Base}} at the current rate.
     <button type="button" class="link" id="reset-layout">Reset layout</button>
@@ -31,36 +38,66 @@
 
 <div class="board" id="board">
 
-<section class="widget" data-widget="summary" data-span="2">
-  {{template "widgethead" (printf "Summary (%s)" .Base)}}
+<section class="widget expense-summary" data-widget="summary-year" data-span="2">
+  {{template "widgethead" (printf "%s summary (%s)" .Year.Month .Base)}}
   <div class="widget-body">
     <div class="cards">
       <div class="card">
-        <span class="label">{{monthName .Month.Month}} spending</span>
-        <strong class="value">{{.Month.Total}}</strong>
-        {{if .Month.Refunds}}
-          <span class="delta up">after {{.Month.Refunds}} of refunds</span>
-        {{else if not .Known}}
-          <span class="empty small">nothing recorded yet</span>
-        {{end}}
+        <span class="label">Spending</span>
+        <strong class="value">{{.Year.Total}}</strong>
+        <span class="summary-detail" aria-hidden="true"></span>
       </div>
       <div class="card">
         <span class="label">Income</span>
-        <strong class="value up">{{.Month.Income}}</strong>
+        <strong class="value up">{{.Year.Income}}</strong>
+        <span class="summary-detail" aria-hidden="true"></span>
+      </div>
+      <div class="card">
+        <span class="label">Taxes</span>
+        <strong class="value down">{{.Year.Taxes}}</strong>
+        <span class="summary-detail" aria-hidden="true"></span>
       </div>
       <div class="card">
         <span class="label">Saved</span>
-        <strong class="value {{if lt .Month.Saved 0}}down{{else}}up{{end}}">{{.Month.Saved}}</strong>
-        {{if .Month.Income}}
-          <span class="delta {{if lt .Month.Saved 0}}down{{else}}up{{end}}">
-            {{printf "%.0f" .Month.SavedPct}}% of what came in
+        <strong class="value {{if lt .Year.Saved 0}}down{{else}}up{{end}}">{{.Year.Saved}}</strong>
+        {{if .Year.Income}}
+          <span class="delta summary-detail {{if lt .Year.Saved 0}}down{{else}}up{{end}}">
+            {{printf "%.0f" .Year.SavedPct}}% of what came in
           </span>
-        {{end}}
+        {{else}}<span class="summary-detail" aria-hidden="true"></span>{{end}}
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="widget expense-summary" data-widget="summary-month" data-span="2">
+  {{template "widgethead" (printf "%s summary (%s)" (monthName .Latest.Month) .Base)}}
+  <div class="widget-body">
+    <div class="cards">
+      <div class="card">
+        <span class="label">Spending</span>
+        <strong class="value">{{.Latest.Total}}</strong>
+        {{if .Latest.Refunds}}<span class="delta summary-detail up">after {{.Latest.Refunds}} of refunds</span>
+        {{else}}<span class="summary-detail" aria-hidden="true"></span>{{end}}
       </div>
       <div class="card">
-        <span class="label">Monthly average</span>
-        <strong class="value">{{.Report.Average}}</strong>
-        <span class="empty small">spent, over {{len .Report.Months}} month(s)</span>
+        <span class="label">Income</span>
+        <strong class="value up">{{.Latest.Income}}</strong>
+        <span class="summary-detail" aria-hidden="true"></span>
+      </div>
+      <div class="card">
+        <span class="label">Taxes</span>
+        <strong class="value down">{{.Latest.Taxes}}</strong>
+        <span class="summary-detail" aria-hidden="true"></span>
+      </div>
+      <div class="card">
+        <span class="label">Saved</span>
+        <strong class="value {{if lt .Latest.Saved 0}}down{{else}}up{{end}}">{{.Latest.Saved}}</strong>
+        {{if .Latest.Income}}
+          <span class="delta summary-detail {{if lt .Latest.Saved 0}}down{{else}}up{{end}}">
+            {{printf "%.0f" .Latest.SavedPct}}% of what came in
+          </span>
+        {{else}}<span class="summary-detail" aria-hidden="true"></span>{{end}}
       </div>
     </div>
   </div>
@@ -90,6 +127,43 @@
   </div>
 </section>
 
+<section class="widget comparison" id="month-comparison" data-widget="month-comparison" data-span="2">
+  {{template "widgethead" (printf "Compare months (%s)" .Base)}}
+  <div class="widget-body">
+    <form class="comparison-pickers" method="get" action="/expenses#month-comparison">
+      <input type="hidden" name="month" value="{{.Month.Month}}">
+      <label>From
+        <input type="month" name="compare_a" value="{{.Comparison.Left.Month}}" onchange="this.form.requestSubmit()">
+      </label>
+      <label>To
+        <input type="month" name="compare_b" value="{{.Comparison.Right.Month}}" onchange="this.form.requestSubmit()">
+      </label>
+    </form>
+    <table class="comparison-summary">
+      <thead><tr><th></th><th class="num">{{monthName .Comparison.Left.Month}}</th><th class="num">{{monthName .Comparison.Right.Month}}</th><th class="num">Change</th></tr></thead>
+      <tbody>
+        <tr><td>Spending</td><td class="num">{{.Comparison.Left.Total}}</td><td class="num">{{.Comparison.Right.Total}}</td><td class="num {{if gt .Comparison.Right.Total .Comparison.Left.Total}}down{{else}}up{{end}}">{{if ge .Comparison.Right.Total .Comparison.Left.Total}}+{{end}}{{subAmount .Comparison.Right.Total .Comparison.Left.Total}}</td></tr>
+        <tr><td>Income</td><td class="num">{{.Comparison.Left.Income}}</td><td class="num">{{.Comparison.Right.Income}}</td><td class="num {{if lt .Comparison.Right.Income .Comparison.Left.Income}}down{{else}}up{{end}}">{{if ge .Comparison.Right.Income .Comparison.Left.Income}}+{{end}}{{subAmount .Comparison.Right.Income .Comparison.Left.Income}}</td></tr>
+        <tr><td>Taxes</td><td class="num">{{.Comparison.Left.Taxes}}</td><td class="num">{{.Comparison.Right.Taxes}}</td><td class="num {{if gt .Comparison.Right.Taxes .Comparison.Left.Taxes}}down{{else}}up{{end}}">{{if ge .Comparison.Right.Taxes .Comparison.Left.Taxes}}+{{end}}{{subAmount .Comparison.Right.Taxes .Comparison.Left.Taxes}}</td></tr>
+        <tr><td>Saved</td><td class="num">{{.Comparison.Left.Saved}}</td><td class="num">{{.Comparison.Right.Saved}}</td><td class="num {{if lt .Comparison.Right.Saved .Comparison.Left.Saved}}down{{else}}up{{end}}">{{if ge .Comparison.Right.Saved .Comparison.Left.Saved}}+{{end}}{{subAmount .Comparison.Right.Saved .Comparison.Left.Saved}}</td></tr>
+      </tbody>
+    </table>
+    {{if .Comparison.Categories}}
+      <h3>Spending by category</h3>
+      <table>
+        <thead><tr><th>Category</th><th class="num">{{.Comparison.Left.Month}}</th><th class="num">{{.Comparison.Right.Month}}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+        {{range .Comparison.Categories}}
+          <tr><td>{{.Category}}</td><td class="num">{{.Left}}</td><td class="num">{{.Right}}</td><td class="num {{if gt .Change 0}}down{{else}}up{{end}}">{{if ge .Change 0}}+{{end}}{{.Change}}</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty">No spending recorded for either month.</p>
+    {{end}}
+  </div>
+</section>
+
 <dialog id="entryDialog" class="modal">
   <header class="modal-head">
     <h2>Add an entry</h2>
@@ -101,6 +175,7 @@
         <select name="kind">
           <option value="expense">Expense</option>
           <option value="income">Income</option>
+          <option value="tax">Tax</option>
         </select>
       </label>
       <label><span>Amount {{template "hint" "On an expense, use a minus for a refund."}}</span>
@@ -156,7 +231,7 @@
         <tbody>
         {{range .Month.Categories}}
           <tr>
-            <td>{{.Category}}</td>
+            <td><a class="category-link" href="/expenses?month={{$.Month.Month}}&amp;category={{.Category}}#entries">{{.Category}}</a></td>
             <td class="barcell"><span class="share" style="width: {{printf "%.0f" .Share}}%"></span></td>
             <td class="num">{{.Total}}</td>
             <td class="num empty small">{{printf "%.0f" .Share}}%</td>
@@ -185,7 +260,7 @@
         <tbody>
         {{range .ByCategory}}
           <tr>
-            <td>{{.Category}}</td>
+            <td><a class="category-link" href="/expenses?category={{.Category}}&amp;scope=all#entries">{{.Category}}</a></td>
             <td>
               {{with trend .Series}}
                 <svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
@@ -210,11 +285,11 @@
   </div>
 </section>
 
-<section class="widget" data-widget="entries" data-span="2">
+<section class="widget" id="entries" data-widget="entries" data-span="2">
   <header class="widget-head">
-    <h2>{{monthName .Month.Month}} entries</h2>
+    <h2>{{.EntryTitle}}{{with .Category}} <a class="clear-filter" href="/expenses?month={{$.Month.Month}}#entries">Clear</a>{{end}}</h2>
     <div class="widget-tools">
-      {{if .Month.Expenses}}
+      {{if and .Month.Expenses (not .Category)}}
         <form method="post" action="/expenses/month/{{.Month.Month}}/delete"
               onsubmit="return confirm('Delete all {{len .Month.Expenses}} entries of {{monthName .Month.Month}}?')">
           <button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button>
@@ -226,15 +301,23 @@
     </div>
   </header>
   <div class="widget-body">
-    {{if .Month.Expenses}}
+    {{if .Entries}}
       <table>
         <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead>
         <tbody>
-        {{range .Month.Expenses}}
+        {{range .Entries}}
+          {{$entry := .}}
           <tr>
             <td>{{.AsOf}}</td>
             <td>
-              <span class="pill {{if .IsIncome}}bought{{else}}cur{{end}}">{{.Category}}</span>
+              <form class="entry-category-form" method="post" action="/expenses/{{.ID}}/category">
+                <input type="hidden" name="month" value="{{$.Month.Month}}">
+                <select class="pill entry-category {{if .IsIncome}}bought{{else if .IsTax}}liability{{else}}cur{{end}}"
+                        name="category" aria-label="Change category" title="Change category"
+                        onchange="this.form.requestSubmit()">
+                  {{range $.Categories}}<option value="{{.}}"{{if eq . $entry.Category}} selected{{end}}>{{.}}</option>{{end}}
+                </select>
+              </form>
             </td>
             <td class="empty">{{.Note}}</td>
             <td class="num {{if .IsIncome}}up{{else}}down{{end}}">
@@ -250,7 +333,8 @@
         </tbody>
       </table>
     {{else}}
-      <p class="empty">No expenses recorded for this month.</p>
+      {{if .Category}}<p class="empty">No matching entries.</p>
+      {{else}}<p class="empty">No expenses recorded for this month.</p>{{end}}
     {{end}}
   </div>
 </section>
