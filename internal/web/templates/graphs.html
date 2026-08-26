@@ -1,0 +1,92 @@
+{{define "graphs.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Graphs</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{{template "navbar" "graphs"}}
+<h1 class="sr-only">Graphs</h1>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+
+<div class="board" id="board">
+
+<section class="widget graph-widget" data-widget="salary-growth" data-span="2">
+  {{template "widgethint" dict "Title" "Salary growth by month" "Hint"
+    (printf "Monthly income in Salary or Salary & pensions, recorded in %s." .Base)}}
+  <div class="widget-body">
+    {{if .Salary.Empty}}
+      <p class="empty">Record salary income to see salary growth.</p>
+    {{else}}
+      <svg class="chart" viewBox="0 0 {{.Salary.Width}} {{.Salary.Height}}" role="img" aria-label="Salary growth by month">
+        {{range .Salary.YTicks}}
+          <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Salary.Width}}" y2="{{.Y}}"/>
+          <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+        {{end}}
+        <polyline class="line salary-line" points="{{.Salary.Line}}"/>
+        {{range .Salary.Dots}}
+          <circle class="dot salary-dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+        {{end}}
+        {{range .Salary.XTicks}}
+          <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
+        {{end}}
+      </svg>
+    {{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="monthly-income" data-span="2">
+  {{template "widgethint" dict "Title" "Income by month" "Hint"
+    (printf "All monthly income recorded in %s, including salary and other income." .Base)}}
+  <div class="widget-body">
+    {{if .Income.Empty}}
+      <p class="empty">Record income to see monthly totals.</p>
+    {{else}}
+      <svg class="chart" viewBox="0 0 {{.Income.Width}} {{.Income.Height}}" role="img" aria-label="Income by month">
+        {{range .Income.YTicks}}
+          <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Income.Width}}" y2="{{.Y}}"/>
+          <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+        {{end}}
+        <polyline class="line income-line" points="{{.Income.Line}}"/>
+        {{range .Income.Dots}}
+          <circle class="dot income-dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+        {{end}}
+        {{range .Income.XTicks}}
+          <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
+        {{end}}
+      </svg>
+    {{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="yearly-taxes" data-span="2">
+  {{template "widgethint" dict "Title" "Taxes paid by year" "Hint"
+    (printf "Tax payments grouped by calendar year in %s." .Base)}}
+  <div class="widget-body">
+    {{if .YearlyTaxes.Empty}}
+      <p class="empty">Record a tax payment to see yearly totals.</p>
+    {{else}}
+      <svg class="chart" viewBox="0 0 {{.YearlyTaxes.Width}} {{.YearlyTaxes.Height}}" role="img" aria-label="Taxes paid by year">
+        {{range .YearlyTaxes.YTicks}}
+          <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.YearlyTaxes.Width}}" y2="{{.Y}}"/>
+          <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+        {{end}}
+        {{range .YearlyTaxes.Bars}}
+          <rect class="bar tax-bar" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="3">
+            <title>{{.Title}}</title>
+          </rect>
+          <text class="tick" x="{{.X}}" y="{{$.YearlyTaxes.Height}}" dx="{{.W}}" dy="-4" text-anchor="middle">{{.Label}}</text>
+        {{end}}
+      </svg>
+    {{end}}
+  </div>
+</section>
+
+</div>
+
+<script src="/static/board.js"></script>
+</body>
+</html>{{end}}

@@ -22,13 +22,14 @@ const (
 // Expense is a single cash flow record, in its own currency. A negative amount
 // on an expense is a refund, which nets off against the rest of the month.
 type Expense struct {
-	ID       int64
-	Kind     string
-	AsOf     string
-	Category string
-	Note     string
-	Currency string
-	Amount   money.Amount
+	ID          int64
+	Kind        string
+	AsOf        string
+	Category    string
+	Subcategory string
+	Note        string
+	Currency    string
+	Amount      money.Amount
 }
 
 // IsRefund reports whether this entry gave money back.
@@ -115,6 +116,22 @@ func (s *Store) SetExpenseCategory(ctx context.Context, id int64, category strin
 	return tx.Commit()
 }
 
+func (s *Store) SetExpenseSubcategory(ctx context.Context, id int64, subcategory string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE expenses SET subcategory = ? WHERE id = ?`,
+		strings.TrimSpace(subcategory), id)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteExpensesForMonth removes every entry in a YYYY-MM month.
 func (s *Store) DeleteExpensesForMonth(ctx context.Context, month string) (int, error) {
 	if _, err := time.Parse("2006-01", month); err != nil {
@@ -138,7 +155,7 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 	}
 
 	key := func(e Expense) string {
-		return fmt.Sprintf("%s|%s|%s|%s|%s|%d", e.Kind, e.AsOf, e.Category, e.Note, e.Currency, e.Amount)
+		return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", e.Kind, e.AsOf, e.Category, e.Subcategory, e.Note, e.Currency, e.Amount)
 	}
 	seen := map[string]int{}
 	for _, e := range existing {
@@ -159,8 +176,8 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `
-            INSERT INTO expenses (kind, as_of, category, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?)`,
-			row.Kind, row.AsOf, row.Category, row.Note, row.Currency, int64(row.Amount))
+            INSERT INTO expenses (kind, as_of, category, subcategory, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			row.Kind, row.AsOf, row.Category, strings.TrimSpace(row.Subcategory), row.Note, row.Currency, int64(row.Amount))
 		if err != nil {
 			return 0, 0, err
 		}
@@ -173,14 +190,14 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 func (s *Store) Expenses(ctx context.Context) ([]Expense, error) {
 	var out []Expense
 	err := query(ctx, s.db, `
-        SELECT id, kind, as_of, category, note, currency, cents
+		SELECT id, kind, as_of, category, subcategory, note, currency, cents
         FROM expenses ORDER BY as_of DESC, id DESC`,
 		func(scan scanner) error {
 			var (
 				e     Expense
 				cents int64
 			)
-			if err := scan(&e.ID, &e.Kind, &e.AsOf, &e.Category, &e.Note, &e.Currency, &cents); err != nil {
+			if err := scan(&e.ID, &e.Kind, &e.AsOf, &e.Category, &e.Subcategory, &e.Note, &e.Currency, &cents); err != nil {
 				return err
 			}
 			e.Amount = money.Amount(cents)
@@ -197,15 +214,23 @@ type CategoryTotal struct {
 	Share    float64      // percent of the month's total
 }
 
+type SubcategoryTotal struct {
+	Category    string
+	Subcategory string
+	Total       money.Amount
+}
+
 // ExpenseMonth aggregates one calendar month of cash flow.
 type ExpenseMonth struct {
-	Month      string
-	Total      money.Amount // spending, net of refunds, in the base currency
-	Refunds    money.Amount // what came back, as a positive number
-	Income     money.Amount
-	Taxes      money.Amount
-	Categories []CategoryTotal
-	Expenses   []Expense // every entry of the month, newest first
+	Month         string
+	Total         money.Amount // spending, net of refunds, in the base currency
+	Refunds       money.Amount // what came back, as a positive number
+	Income        money.Amount
+	Salary        money.Amount
+	Taxes         money.Amount
+	Categories    []CategoryTotal
+	Subcategories []SubcategoryTotal
+	Expenses      []Expense // every entry of the month, newest first
 }
 
 // Saved is what was left of the month's income.
@@ -230,14 +255,29 @@ type ExpenseReport struct {
 // Year returns the combined cash flow for one calendar year.
 func (r ExpenseReport) Year(year string) ExpenseMonth {
 	total := ExpenseMonth{Month: year}
+	byCategory := make(map[string]money.Amount)
 	for _, month := range r.Months {
 		if strings.HasPrefix(month.Month, year) {
 			total.Total += month.Total
 			total.Refunds += month.Refunds
 			total.Income += month.Income
+			total.Salary += month.Salary
 			total.Taxes += month.Taxes
+			for _, category := range month.Categories {
+				byCategory[category.Category] += category.Total
+			}
 		}
 	}
+	for category, amount := range byCategory {
+		row := CategoryTotal{Category: category, Total: amount}
+		if total.Total != 0 {
+			row.Share = float64(amount) / float64(total.Total) * 100
+		}
+		total.Categories = append(total.Categories, row)
+	}
+	sort.Slice(total.Categories, func(i, j int) bool {
+		return total.Categories[i].Total > total.Categories[j].Total
+	})
 	return total
 }
 
@@ -315,6 +355,52 @@ type CategorySummary struct {
 	Series   []money.Amount // one entry per month of the report, oldest first
 }
 
+// SubcategorySummary is one secondary category's spending within a primary category.
+type SubcategorySummary struct {
+	Subcategory  string
+	CurrentMonth money.Amount
+	Total        money.Amount
+	Share        float64
+}
+
+// BySubcategory totals secondary categories within one primary category.
+func (r ExpenseReport) BySubcategory(category, currentMonth string) []SubcategorySummary {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return nil
+	}
+
+	totals := map[string]money.Amount{}
+	currentTotals := map[string]money.Amount{}
+	var categoryTotal money.Amount
+	for _, month := range r.Months {
+		for _, total := range month.Subcategories {
+			if strings.EqualFold(total.Category, category) {
+				totals[total.Subcategory] += total.Total
+				if month.Month == currentMonth {
+					currentTotals[total.Subcategory] += total.Total
+				}
+				categoryTotal += total.Total
+			}
+		}
+	}
+
+	out := make([]SubcategorySummary, 0, len(totals))
+	for subcategory, total := range totals {
+		row := SubcategorySummary{
+			Subcategory:  subcategory,
+			CurrentMonth: currentTotals[subcategory],
+			Total:        total,
+		}
+		if categoryTotal != 0 {
+			row.Share = float64(total) / float64(categoryTotal) * 100
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Total > out[j].Total })
+	return out
+}
+
 // ByCategory totals every category over the whole report, biggest first.
 func (r ExpenseReport) ByCategory() []CategorySummary {
 	if len(r.Months) == 0 {
@@ -388,6 +474,7 @@ func (r ExpenseReport) UsedCategories() []string {
 func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseReport {
 	byMonth := map[string]*ExpenseMonth{}
 	byCategory := map[string]map[string]money.Amount{}
+	bySubcategory := map[string]map[string]map[string]money.Amount{}
 
 	for _, e := range expenses {
 		amount, _ := convert(e.Amount, e.Currency, rates)
@@ -396,11 +483,15 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			m = &ExpenseMonth{Month: e.Month()}
 			byMonth[e.Month()] = m
 			byCategory[e.Month()] = map[string]money.Amount{}
+			bySubcategory[e.Month()] = map[string]map[string]money.Amount{}
 		}
 		m.Expenses = append(m.Expenses, e)
 
 		if e.IsIncome() {
 			m.Income += amount
+			if isSalaryCategory(e.Category) {
+				m.Salary += amount
+			}
 			continue // income is not spending, and has no place in the categories
 		}
 		if classifyEntry(e.Kind, e.Category) == KindTax {
@@ -412,6 +503,14 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			m.Refunds -= amount
 		}
 		byCategory[e.Month()][e.Category] += amount
+		subcategory := strings.TrimSpace(e.Subcategory)
+		if subcategory == "" {
+			subcategory = "Uncategorized"
+		}
+		if bySubcategory[e.Month()][e.Category] == nil {
+			bySubcategory[e.Month()][e.Category] = map[string]money.Amount{}
+		}
+		bySubcategory[e.Month()][e.Category][subcategory] += amount
 	}
 
 	report := ExpenseReport{}
@@ -422,6 +521,13 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 				share = float64(total) / float64(m.Total) * 100
 			}
 			m.Categories = append(m.Categories, CategoryTotal{Category: category, Total: total, Share: share})
+		}
+		for category, subcategories := range bySubcategory[m.Month] {
+			for subcategory, total := range subcategories {
+				m.Subcategories = append(m.Subcategories, SubcategoryTotal{
+					Category: category, Subcategory: subcategory, Total: total,
+				})
+			}
 		}
 		sort.Slice(m.Categories, func(i, j int) bool { return m.Categories[i].Total > m.Categories[j].Total })
 		sort.Slice(m.Expenses, func(i, j int) bool {
@@ -440,6 +546,15 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		report.Average = report.Total / money.Amount(n)
 	}
 	return report
+}
+
+func isSalaryCategory(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "salary", "salary & pensions":
+		return true
+	default:
+		return false
+	}
 }
 
 func isTaxCategory(category string) bool {

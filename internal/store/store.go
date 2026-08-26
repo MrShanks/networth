@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -158,6 +159,9 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"accounts", "asset_class", "ALTER TABLE accounts ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'cash'"},
 	{"accounts", "owner", "ALTER TABLE accounts ADD COLUMN owner TEXT NOT NULL DEFAULT ''"},
 	{"funds", "asset_class", "ALTER TABLE funds ADD COLUMN asset_class TEXT NOT NULL DEFAULT 'stocks'"},
+	{"category_rules", "match_mode", "ALTER TABLE category_rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'any'"},
+	{"expenses", "subcategory", "ALTER TABLE expenses ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''"},
+	{"category_rules", "subcategory", "ALTER TABLE category_rules ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''"},
 }
 
 func Open(dsn string) (*Store, error) {
@@ -381,7 +385,7 @@ func (s *Store) SetDashboardChangeReset(ctx context.Context, date string) error 
 	return err
 }
 
-func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, class string) error {
+func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, class, asOf string, openingBalance *money.Amount) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)
 	}
@@ -391,9 +395,32 @@ func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, 
 	if err := checkClass(class); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx,
+	if openingBalance != nil {
+		if err := checkDate(asOf); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx,
 		`INSERT INTO accounts (name, owner, kind, currency, asset_class) VALUES (?, ?, ?, ?, ?)`, name, owner, kind, currency, class)
-	return err
+	if err != nil {
+		return err
+	}
+	if openingBalance != nil {
+		accountID, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO balances (account_id, as_of, cents) VALUES (?, ?, ?)`, accountID, asOf, int64(*openingBalance)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
@@ -447,17 +474,52 @@ func (s *Store) SetAccountClass(ctx context.Context, id int64, class string) err
 	return nil
 }
 
-func (s *Store) CreateFund(ctx context.Context, accountID int64, name, ticker, currency, class string) error {
+func (s *Store) CreateFund(ctx context.Context, accountID int64, name, ticker, currency, class, asOf string, units float64, price *money.Amount) error {
 	if err := checkCurrency(currency); err != nil {
 		return err
 	}
 	if err := checkClass(class); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx,
+	if price != nil {
+		if err := checkDate(asOf); err != nil {
+			return err
+		}
+		if units <= 0 || math.IsNaN(units) || math.IsInf(units, 0) {
+			return errors.New("initial units must be a positive number")
+		}
+		if *price < 0 {
+			return errors.New("price cannot be negative")
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx,
 		`INSERT INTO funds (account_id, name, ticker, currency, asset_class) VALUES (?, ?, ?, ?, ?)`,
 		accountID, name, ticker, currency, class)
-	return err
+	if err != nil {
+		return err
+	}
+	if price != nil {
+		fundID, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO trades (fund_id, as_of, units, price_cents) VALUES (?, ?, ?, ?)`,
+			fundID, asOf, units, int64(*price)); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO prices (fund_id, as_of, price_cents) VALUES (?, ?, ?)`,
+			fundID, asOf, int64(*price)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteFund(ctx context.Context, id int64) error {

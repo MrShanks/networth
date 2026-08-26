@@ -23,6 +23,10 @@
       spans: Object.fromEntries(widgets().map((w) => [idOf(w), Number(w.dataset.span) || 1])),
       columns: Object.fromEntries(widgets().filter((w) => w.dataset.column)
         .map((w) => [idOf(w), Number(w.dataset.column)])),
+      titles: Object.fromEntries(widgets().map((w) => {
+        const title = w.querySelector('[data-widget-title]');
+        return [idOf(w), title?.textContent.trim() || title?.dataset.defaultTitle || ''];
+      })),
     };
     localStorage.setItem(KEY, JSON.stringify(state));
   }
@@ -42,7 +46,16 @@
     Object.entries(state.columns || {}).forEach(([id, column]) => {
       if (byID.has(id)) byID.get(id).dataset.column = column;
     });
+    Object.entries(state.titles || {}).forEach(([id, value]) => {
+      const title = byID.get(id)?.querySelector('[data-widget-title]');
+      if (title && String(value).trim()) title.textContent = String(value).trim();
+    });
   }
+
+  widgets().forEach((widget) => {
+    const title = widget.querySelector('[data-widget-title]');
+    if (title) title.dataset.defaultTitle = title.textContent.trim();
+  });
 
   function columnCount() {
     if (matchMedia('(max-width: 720px)').matches) return 1;
@@ -124,6 +137,33 @@
     save();
   });
 
+  // Inline titles: Enter commits, Escape restores the previous value, and a
+  // blank title resets to the server-provided default.
+  let titleBeforeEdit = '';
+  board.addEventListener('focusin', (e) => {
+    const title = e.target.closest('[data-widget-title]');
+    if (title) titleBeforeEdit = title.textContent.trim();
+  });
+  board.addEventListener('keydown', (e) => {
+    const title = e.target.closest('[data-widget-title]');
+    if (!title) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      title.blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      title.textContent = titleBeforeEdit || title.dataset.defaultTitle;
+      title.blur();
+    }
+  });
+  board.addEventListener('blur', (e) => {
+    const title = e.target.closest('[data-widget-title]');
+    if (!title) return;
+    title.textContent = title.textContent.trim() || title.dataset.defaultTitle;
+    save();
+    layout();
+  }, true);
+
   // Dragging: the grip carries the drag, the widget is what moves.
   let dragged = null;
 
@@ -174,10 +214,55 @@
 
   board.addEventListener('drop', (e) => e.preventDefault());
 
-  document.getElementById('reset-layout')?.addEventListener('click', () => {
-    localStorage.removeItem(KEY);
-    location.reload();
-  });
+  const accountsBody = board.querySelector('.accounts-table > tbody');
+  if (accountsBody) {
+    const orderKey = 'networth.accounts.order';
+    const accountRows = () => [...accountsBody.querySelectorAll(':scope > .account-row')];
+    const fundRow = (row) => row.nextElementSibling?.classList.contains('account-funds')
+      ? row.nextElementSibling
+      : null;
+    const moveGroupBefore = (row, before) => {
+      const funds = fundRow(row);
+      if (before === row || before === funds) return;
+      accountsBody.insertBefore(row, before);
+      if (funds) accountsBody.insertBefore(funds, before);
+    };
+
+    try {
+      const byID = new Map(accountRows().map((row) => [row.dataset.account, row]));
+      const saved = JSON.parse(localStorage.getItem(orderKey) || '[]').map(String);
+      const savedIDs = new Set(saved);
+      const ordered = saved.map((id) => byID.get(id)).filter(Boolean)
+        .concat(accountRows().filter((row) => !savedIDs.has(row.dataset.account)));
+      ordered.forEach((row) => moveGroupBefore(row, null));
+    } catch (e) {
+      // Ignore invalid saved layout and use the server order.
+    }
+
+    let draggedAccount = null;
+    accountsBody.addEventListener('dragstart', (e) => {
+      if (!e.target.closest('.account-grip')) return;
+      draggedAccount = e.target.closest('.account-row');
+      draggedAccount.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggedAccount.dataset.account);
+    });
+    accountsBody.addEventListener('dragover', (e) => {
+      if (!draggedAccount) return;
+      const target = e.target.closest('.account-row');
+      if (!target || target === draggedAccount) return;
+      e.preventDefault();
+      const before = e.clientY < target.getBoundingClientRect().top + target.offsetHeight / 2;
+      moveGroupBefore(draggedAccount, before ? target : fundRow(target)?.nextElementSibling || target.nextElementSibling);
+    });
+    accountsBody.addEventListener('dragend', () => {
+      if (!draggedAccount) return;
+      draggedAccount.classList.remove('dragging');
+      draggedAccount = null;
+      localStorage.setItem(orderKey, JSON.stringify(accountRows().map((row) => row.dataset.account)));
+      layout();
+    });
+  }
 
   restore();
   layout(true);

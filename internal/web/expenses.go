@@ -15,24 +15,27 @@ import (
 )
 
 type expensesData struct {
-	Base       string
-	Currencies []string
-	Report     store.ExpenseReport
-	Month      store.ExpenseMonth
-	Latest     store.ExpenseMonth
-	Year       store.ExpenseMonth
-	Comparison monthComparison
-	Entries    []store.Expense
-	EntryTitle string
-	Category   string
-	Known      bool
-	Categories []string
-	ByCategory []store.CategorySummary
-	Rules      []store.Rule
-	Bars       BarChart
-	Today      string
-	Notice     string
-	Error      string
+	Base              string
+	Currencies        []string
+	Report            store.ExpenseReport
+	Month             store.ExpenseMonth
+	Latest            store.ExpenseMonth
+	Year              store.ExpenseMonth
+	Comparison        monthComparison
+	YearComparison    monthComparison
+	Entries           []store.Expense
+	EntryTitle        string
+	Category          string
+	Known             bool
+	Categories        []string
+	ByCategory        []store.CategorySummary
+	SecondaryCategory string
+	BySubcategory     []store.SubcategorySummary
+	Rules             []ruleView
+	Bars              BarChart
+	Today             string
+	Notice            string
+	Error             string
 }
 
 type monthComparison struct {
@@ -46,6 +49,11 @@ type categoryComparison struct {
 	Left     money.Amount
 	Right    money.Amount
 	Change   money.Amount
+}
+
+type ruleView struct {
+	store.Rule
+	Matches int
 }
 
 func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +70,9 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 	if len(month.Month) >= 4 {
 		year = month.Month[:4]
 	}
+	yearComparison := compareYears(report, r.URL.Query().Get("compare_year_a"), r.URL.Query().Get("compare_year_b"), year)
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	secondaryCategory := strings.TrimSpace(r.URL.Query().Get("secondary_category"))
 	entries := month.Expenses
 	entryTitle := monthName(month.Month) + " entries"
 	if category != "" {
@@ -79,26 +89,41 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	ruleViews := make([]ruleView, 0, len(rules))
+	for _, rule := range rules {
+		matches := 0
+		for _, month := range report.Months {
+			for _, expense := range month.Expenses {
+				if rule.Matches(expense.Note) {
+					matches++
+				}
+			}
+		}
+		ruleViews = append(ruleViews, ruleView{Rule: rule, Matches: matches})
+	}
 
 	s.render(w, "expenses.html", expensesData{
-		Base:       store.Base,
-		Currencies: store.Currencies,
-		Report:     report,
-		Month:      month,
-		Latest:     month,
-		Year:       report.Year(year),
-		Comparison: comparison,
-		Entries:    entries,
-		EntryTitle: entryTitle,
-		Category:   category,
-		Known:      known,
-		Categories: report.UsedCategories(),
-		ByCategory: report.ByCategory(),
-		Rules:      rules,
-		Bars:       buildBars(report.Months, month.Month),
-		Today:      time.Now().Format("2006-01-02"),
-		Notice:     r.URL.Query().Get("msg"),
-		Error:      r.URL.Query().Get("err"),
+		Base:              store.Base,
+		Currencies:        store.Currencies,
+		Report:            report,
+		Month:             month,
+		Latest:            month,
+		Year:              report.Year(year),
+		Comparison:        comparison,
+		YearComparison:    yearComparison,
+		Entries:           entries,
+		EntryTitle:        entryTitle,
+		Category:          category,
+		Known:             known,
+		Categories:        report.UsedCategories(),
+		ByCategory:        report.ByCategory(),
+		SecondaryCategory: secondaryCategory,
+		BySubcategory:     report.BySubcategory(secondaryCategory, month.Month),
+		Rules:             ruleViews,
+		Bars:              buildBars(report.Months, month.Month),
+		Today:             time.Now().Format("2006-01-02"),
+		Notice:            r.URL.Query().Get("msg"),
+		Error:             r.URL.Query().Get("err"),
 	})
 }
 
@@ -113,7 +138,22 @@ func compareMonths(report store.ExpenseReport, left, right, selected string) mon
 	}
 	leftMonth, _ := report.Find(left)
 	rightMonth, _ := report.Find(right)
+	return comparePeriods(leftMonth, rightMonth)
+}
 
+func compareYears(report store.ExpenseReport, left, right, selected string) monthComparison {
+	if right == "" {
+		right = selected
+	}
+	if left == "" {
+		if year, err := strconv.Atoi(right); err == nil {
+			left = strconv.Itoa(year - 1)
+		}
+	}
+	return comparePeriods(report.Year(left), report.Year(right))
+}
+
+func comparePeriods(leftMonth, rightMonth store.ExpenseMonth) monthComparison {
 	byCategory := make(map[string]*categoryComparison)
 	for _, category := range leftMonth.Categories {
 		byCategory[category.Category] = &categoryComparison{Category: category.Category, Left: category.Total}
@@ -212,6 +252,25 @@ func (s *Server) handleSetExpenseCategory(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, target+"#entries", http.StatusSeeOther)
 }
 
+func (s *Server) handleSetExpenseSubcategory(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err == nil {
+		err = s.store.SetExpenseSubcategory(r.Context(), id, r.FormValue("subcategory"))
+	}
+	values := url.Values{}
+	if month := r.FormValue("month"); month != "" {
+		values.Set("month", month)
+	}
+	if err != nil {
+		values.Set("err", err.Error())
+	}
+	target := "/expenses"
+	if query := values.Encode(); query != "" {
+		target += "?" + query
+	}
+	http.Redirect(w, r, target+"#entries", http.StatusSeeOther)
+}
+
 func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {
 	month := r.PathValue("month")
 	if _, err := s.store.DeleteExpensesForMonth(r.Context(), month); err != nil {
@@ -224,19 +283,21 @@ func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {
 // handleAddRule saves a rule and applies it to what is already stored, so a
 // category can be fixed everywhere at once.
 func (s *Server) handleAddRule(w http.ResponseWriter, r *http.Request) {
+	mode := strings.TrimSpace(r.FormValue("mode"))
 	pattern := r.FormValue("pattern")
+	subcategory := strings.TrimSpace(r.FormValue("subcategory"))
 	category := r.FormValue("category")
 	if other := strings.TrimSpace(r.FormValue("new_category")); other != "" {
 		category = other
 	}
 
-	if err := s.store.AddRule(r.Context(), pattern, category); err != nil {
+	if err := s.store.AddRule(r.Context(), mode, pattern, category, subcategory); err != nil {
 		s.redirectTo(w, r, "/expenses", "could not add the rule: "+err.Error())
 		return
 	}
 
 	moved, err := s.store.Recategorise(r.Context(),
-		store.Rule{Pattern: strings.TrimSpace(pattern), Category: strings.TrimSpace(category)})
+		store.Rule{Mode: mode, Pattern: strings.TrimSpace(pattern), Category: strings.TrimSpace(category), Subcategory: subcategory})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -257,6 +318,31 @@ func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirectTo(w, r, "/expenses", "")
+}
+
+func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirectTo(w, r, "/expenses", "invalid rule")
+		return
+	}
+	mode := strings.TrimSpace(r.FormValue("mode"))
+	pattern := strings.TrimSpace(r.FormValue("pattern"))
+	category := strings.TrimSpace(r.FormValue("new_category"))
+	subcategory := strings.TrimSpace(r.FormValue("subcategory"))
+	if err := s.store.UpdateRule(r.Context(), id, mode, pattern, category, subcategory); err != nil {
+		s.redirectTo(w, r, "/expenses", "could not update the rule: "+err.Error())
+		return
+	}
+	moved, err := s.store.Recategorise(r.Context(), store.Rule{
+		ID: id, Mode: mode, Pattern: pattern, Category: category, Subcategory: subcategory,
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.noticeTo(w, r, "/expenses", fmt.Sprintf("Rule updated, %d existing entr%s moved to %s.",
+		moved, plural(moved, "y", "ies"), category))
 }
 
 func plural(n int, one, many string) string {

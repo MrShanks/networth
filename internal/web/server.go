@@ -101,11 +101,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /prices/{id}/delete", s.handleDeletePrice)
 	s.mux.HandleFunc("GET /api/rates", s.handleRatesAPI)
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
+	s.mux.HandleFunc("GET /graphs", s.handleGraphs)
 	s.mux.HandleFunc("POST /expenses", s.handleAddExpense)
 	s.mux.HandleFunc("POST /expenses/{id}/category", s.handleSetExpenseCategory)
+	s.mux.HandleFunc("POST /expenses/{id}/subcategory", s.handleSetExpenseSubcategory)
 	s.mux.HandleFunc("POST /expenses/{id}/delete", s.handleDeleteExpense)
 	s.mux.HandleFunc("POST /expenses/month/{month}/delete", s.handleDeleteMonth)
 	s.mux.HandleFunc("POST /rules", s.handleAddRule)
+	s.mux.HandleFunc("POST /rules/{id}", s.handleUpdateRule)
 	s.mux.HandleFunc("POST /rules/{id}/delete", s.handleDeleteRule)
 	s.mux.HandleFunc("POST /expenses/import", s.handleImportExpenses)
 	s.mux.HandleFunc("GET /retire", s.handleRetire)
@@ -312,7 +315,17 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if class == "" {
 		class = store.ClassCash
 	}
-	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("kind"), r.FormValue("currency"), class)
+	var openingBalance *money.Amount
+	if raw := strings.TrimSpace(r.FormValue("amount")); raw != "" {
+		amount, err := money.Parse(raw)
+		if err != nil {
+			s.redirect(w, r, "opening balance must look like 1234.56")
+			return
+		}
+		openingBalance = &amount
+	}
+	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("kind"),
+		r.FormValue("currency"), class, s.date(r), openingBalance)
 	if err != nil {
 		s.redirect(w, r, "could not add account: "+err.Error())
 		return
@@ -362,8 +375,30 @@ func (s *Server) handleCreateFund(w http.ResponseWriter, r *http.Request) {
 	if class == "" {
 		class = store.ClassStocks
 	}
+	var initialPrice *money.Amount
+	var units float64
+	priceRaw := strings.TrimSpace(r.FormValue("price"))
+	unitsRaw := strings.TrimSpace(r.FormValue("units"))
+	if priceRaw != "" || unitsRaw != "" {
+		if priceRaw == "" || unitsRaw == "" {
+			s.redirect(w, r, "initial units and price are both required")
+			return
+		}
+		price, err := money.Parse(priceRaw)
+		if err != nil {
+			s.redirect(w, r, "price must look like 87.40")
+			return
+		}
+		units, err = parseFloat(unitsRaw)
+		if err != nil {
+			s.redirect(w, r, "units must be a number, e.g. 12.5")
+			return
+		}
+		initialPrice = &price
+	}
 
-	if err := s.store.CreateFund(r.Context(), accountID, name, ticker, r.FormValue("currency"), class); err != nil {
+	if err := s.store.CreateFund(r.Context(), accountID, name, ticker, r.FormValue("currency"), class,
+		s.date(r), units, initialPrice); err != nil {
 		s.redirect(w, r, "could not add fund: "+err.Error())
 		return
 	}

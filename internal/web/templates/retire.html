@@ -7,20 +7,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Retirement</h1>
-  <nav>
-    <a href="/">Net worth</a>
-    <a href="/expenses">Expenses</a>
-    <a href="/records">Records</a>
-    <a class="current" href="/retire">Retirement</a>
-  </nav>
-  <p class="sub">
-    How long until your portfolio can cover your spending. Amounts are in
-    today's {{.Base}}, so inflation is already taken out.
-    <button type="button" class="link" id="reset-layout">Reset layout</button>
-  </p>
-</header>
+{{template "navbar" "retirement"}}
+<h1 class="sr-only">Retirement</h1>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
 {{if not .HasExpense}}

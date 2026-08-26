@@ -98,6 +98,7 @@ func TestPagesRender(t *testing.T) {
 	pages := []struct{ path, wants string }{
 		{"/", "Net worth"},
 		{"/expenses", "Add an entry"},
+		{"/graphs", "Salary growth by month"},
 		{"/records", "Best months for investments"},
 		{"/retire", "How long the money lasts"},
 	}
@@ -121,6 +122,66 @@ func TestPagesRender(t *testing.T) {
 				t.Errorf("page does not mention %q", page.wants)
 			}
 		})
+	}
+}
+
+func TestEveryWidgetHasAnEditableTitle(t *testing.T) {
+	srv := newTestServer(t)
+	seed(t, srv)
+
+	for _, path := range []string{"/", "/expenses", "/graphs", "/records", "/retire"} {
+		body := get(t, srv, path)
+		widgets := strings.Count(body, `<section class="widget`)
+		titles := strings.Count(body, `data-widget-title`)
+		if widgets == 0 || titles != widgets {
+			t.Errorf("%s has %d widgets and %d editable titles", path, widgets, titles)
+		}
+	}
+}
+
+func TestGraphsSeparateSalaryIncomeAndYearlyTaxes(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary & pensions"}, "kind": {"income"}, "as_of": {"2025-12-20"}},
+		{"amount": {"500"}, "currency": {"CHF"}, "new_category": {"Bonus"}, "kind": {"income"}, "as_of": {"2025-12-21"}},
+		{"amount": {"5200"}, "currency": {"CHF"}, "new_category": {"Salary"}, "kind": {"income"}, "as_of": {"2026-01-20"}},
+		{"amount": {"1000"}, "currency": {"CHF"}, "new_category": {"Taxes"}, "kind": {"tax"}, "as_of": {"2025-06-10"}},
+		{"amount": {"1200"}, "currency": {"CHF"}, "new_category": {"Taxes"}, "kind": {"tax"}, "as_of": {"2026-03-10"}},
+		{"amount": {"300"}, "currency": {"CHF"}, "new_category": {"Taxes"}, "kind": {"tax"}, "as_of": {"2026-07-10"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	body := get(t, srv, "/graphs")
+	for _, want := range []string{
+		`href="/graphs">Graphs</a>`, `data-widget="salary-growth"`, `data-widget="monthly-income"`,
+		`data-widget="yearly-taxes"`, `class="bar tax-bar"`,
+		"2025: 1,000.00", "2026: 1,500.00",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("graphs page is missing %q", want)
+		}
+	}
+	salaryStart := strings.Index(body, `data-widget="salary-growth"`)
+	incomeStart := strings.Index(body, `data-widget="monthly-income"`)
+	taxesStart := strings.Index(body, `data-widget="yearly-taxes"`)
+	salaryPanel := body[salaryStart:incomeStart]
+	incomePanel := body[incomeStart:taxesStart]
+	for _, want := range []string{`class="line salary-line"`, "2025-12: 5,000.00", "2026-01: 5,200.00"} {
+		if !strings.Contains(salaryPanel, want) {
+			t.Errorf("salary graph is missing %q", want)
+		}
+	}
+	if strings.Contains(salaryPanel, "5,500.00") {
+		t.Error("salary graph includes non-salary income")
+	}
+	for _, want := range []string{`class="line income-line"`, "2025-12: 5,500.00", "2026-01: 5,200.00"} {
+		if !strings.Contains(incomePanel, want) {
+			t.Errorf("income graph is missing %q", want)
+		}
+	}
+	if lines := chartLines(body); len(lines) != 2 {
+		t.Errorf("graph lines = %v, want separate salary and income lines", lines)
 	}
 }
 
@@ -221,6 +282,14 @@ func TestExpenseCategoryDrillDown(t *testing.T) {
 	}
 
 	body := get(t, srv, "/expenses?month=2026-08")
+	for _, column := range []string{"date", "category", "note", "amount"} {
+		if !strings.Contains(body, `data-sort-column="`+column+`"`) {
+			t.Errorf("entries table is missing %s sorting", column)
+		}
+	}
+	if !strings.Contains(body, `data-sort-value="-30.00"`) {
+		t.Error("entries table is missing a numeric amount sort value")
+	}
 	if strings.Contains(body, "%2526") {
 		t.Error("category ampersand was double encoded")
 	}
@@ -241,6 +310,77 @@ func TestExpenseCategoryDrillDown(t *testing.T) {
 	all := get(t, srv, "/expenses?category=Food+%26+drink&scope=all")
 	if !strings.Contains(all, "August dinner") || !strings.Contains(all, "July lunch") || strings.Contains(all, "Train") {
 		t.Error("all-time category drill-down did not filter entries correctly")
+	}
+}
+
+func TestExpenseActionsRenderInOwningPanels(t *testing.T) {
+	srv := newTestServer(t)
+	body := get(t, srv, "/expenses")
+
+	categoryStart := strings.Index(body, `data-widget="by-category"`)
+	rulesStart := strings.Index(body, `data-widget="rules"`)
+	entriesStart := strings.Index(body, `data-widget="entries"`)
+	if categoryStart < 0 || rulesStart < 0 || entriesStart < 0 {
+		t.Fatal("expense category, rules, or entries widget is missing")
+	}
+	categoryPanel := body[categoryStart:rulesStart]
+	rulesPanel := body[rulesStart:entriesStart]
+	entriesPanel := body[entriesStart : strings.Index(body[entriesStart:], "</section>")+entriesStart]
+	if strings.Contains(categoryPanel, "Add rule") {
+		t.Error("Add rule is still in the category panel")
+	}
+	for _, want := range []string{
+		`id="show-rule-form"`, `id="rule-form" hidden`, `data-widget="rules"`,
+	} {
+		if !strings.Contains(rulesPanel, want) {
+			t.Errorf("rules panel is missing %q", want)
+		}
+	}
+	if strings.Contains(body, `id="rulesDialog"`) {
+		t.Error("category rules still render in a dialog")
+	}
+	for _, action := range []string{
+		`onclick="entryDialog.showModal()">Add</button>`,
+		`onclick="importDialog.showModal()">Import</button>`,
+	} {
+		if !strings.Contains(entriesPanel, action) {
+			t.Errorf("entries panel is missing %q", action)
+		}
+	}
+	pageHeader := body[:strings.Index(body, `<div class="board"`)]
+	if strings.Contains(pageHeader, "showModal()") {
+		t.Error("page toolbar still contains expense action buttons")
+	}
+}
+
+func TestSecondaryCategoryPanelRequiresPrimarySelection(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"amount": {"40"}, "currency": {"CHF"}, "new_category": {"Food"},
+		"as_of": {"2026-08-01"},
+	})
+	post(t, srv, "/expenses/1/subcategory", url.Values{"subcategory": {"Supermarket"}})
+
+	body := get(t, srv, "/expenses")
+	start := strings.Index(body, `data-widget="by-subcategory"`)
+	if start < 0 {
+		t.Fatal("secondary-category widget is missing")
+	}
+	panel := body[start : strings.Index(body[start:], "</section>")+start]
+	if !strings.Contains(panel, `<option value="">Select a category</option>`) {
+		t.Error("secondary-category selector has no empty default")
+	}
+	if strings.Contains(panel, "Supermarket") {
+		t.Error("secondary-category table is populated without a primary selection")
+	}
+
+	body = get(t, srv, "/expenses?month=2026-08&secondary_category=Food")
+	start = strings.Index(body, `data-widget="by-subcategory"`)
+	panel = body[start : strings.Index(body[start:], "</section>")+start]
+	for _, want := range []string{`value="Food" selected`, `name="month" value="2026-08"`, "August 2026", "Supermarket", "40.00"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("selected secondary-category panel is missing %q", want)
+		}
 	}
 }
 
@@ -266,6 +406,29 @@ func TestExpenseCategoryCanBeReassigned(t *testing.T) {
 	}
 	if !strings.Contains(body, `class="pill entry-category liability"`) {
 		t.Error("reassigned tax entry is not rendered as tax")
+	}
+}
+
+func TestExpenseSubcategoryCanBeSetInline(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"25"}, "currency": {"CHF"},
+		"new_category": {"Groceries"}, "note": {"MIGROS"}, "as_of": {"2026-08-02"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/expenses/1/subcategory", strings.NewReader(url.Values{
+		"subcategory": {"Supermarket"}, "month": {"2026-08"},
+	}.Encode()))
+	req.SetPathValue("id", "1")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Location"); got != "/expenses?month=2026-08#entries" {
+		t.Fatalf("Location = %q", got)
+	}
+	page := get(t, srv, "/expenses?month=2026-08")
+	if !strings.Contains(page, `name="subcategory" value="Supermarket"`) {
+		t.Error("inline subcategory was not persisted or rendered")
 	}
 }
 
@@ -304,7 +467,42 @@ func TestExpenseMonthComparison(t *testing.T) {
 	}
 }
 
-func TestAccountWidgetDoesNotRepeatItsOwnCurrency(t *testing.T) {
+func TestExpenseYearComparison(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"}, "new_category": {"Groceries"}, "as_of": {"2025-07-01"}},
+		{"kind": {"expense"}, "amount": {"150"}, "currency": {"CHF"}, "new_category": {"Groceries"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"30"}, "currency": {"CHF"}, "new_category": {"Travel"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	body := get(t, srv, "/expenses?month=2026-08")
+	if !strings.Contains(body, `id="year-comparison"`) {
+		t.Error("year comparison widget is missing its navigation anchor")
+	}
+	comparison := body[strings.Index(body, `data-widget="year-comparison"`):]
+	comparison = comparison[:strings.Index(comparison, "</section>")]
+	for _, want := range []string{
+		`action="/expenses#year-comparison"`,
+		`name="compare_year_a" min="1900" max="2100" value="2025"`,
+		`name="compare_year_b" min="1900" max="2100" value="2026"`,
+		`<td class="num down">+80.00</td>`,
+		"Groceries", "Travel",
+	} {
+		if !strings.Contains(comparison, want) {
+			t.Errorf("year comparison does not contain %q", want)
+		}
+	}
+
+	body = get(t, srv, "/expenses?month=2026-08&compare_year_a=2026&compare_year_b=2025")
+	if !strings.Contains(body, `name="compare_year_a" min="1900" max="2100" value="2026"`) ||
+		!strings.Contains(body, `name="compare_year_b" min="1900" max="2100" value="2025"`) {
+		t.Error("explicit comparison years were not preserved")
+	}
+}
+
+func TestAccountTableDoesNotRepeatItsOwnCurrency(t *testing.T) {
 	srv := newTestServer(t)
 	// A CHF account: the currency selector already says CHF, so neither Cash
 	// nor Account total (also CHF) should spell out the currency again.
@@ -317,19 +515,136 @@ func TestAccountWidgetDoesNotRepeatItsOwnCurrency(t *testing.T) {
 	post(t, srv, "/balances", url.Values{"account_id": {"2"}, "amount": {"50"}, "as_of": {"2026-01-01"}})
 
 	body := get(t, srv, "/")
-	section := func(id string) string {
-		s := body[strings.Index(body, `data-widget="account-`+id+`"`):]
-		return s[:strings.Index(s, "</section>")]
+	row := func(id string) string {
+		s := body[strings.Index(body, `data-account="`+id+`"`):]
+		return s[:strings.Index(s, "</tr>")]
 	}
 
-	if strings.Contains(section("1"), "CHF</strong>") {
+	if strings.Contains(row("1"), "CHF</strong>") {
 		t.Error("a CHF account should not repeat CHF next to its own values")
 	}
-	if strings.Contains(section("2"), "EUR</strong>") {
+	if strings.Contains(row("2"), "EUR</strong>") {
 		t.Error("cash should not repeat the account's own currency, already shown by the selector")
 	}
-	if got := strings.Count(section("2"), "CHF</strong>"); got != 1 {
-		t.Errorf("a EUR account's converted total should mention CHF once, got %d", got)
+	if strings.Contains(row("2"), "CHF</strong>") {
+		t.Error("the table header already identifies converted totals as CHF")
+	}
+}
+
+func TestAccountsRenderInOneTableWithInlineAddRow(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{"name": {"Viac"}, "kind": {"asset"}, "currency": {"CHF"}})
+	post(t, srv, "/accounts", url.Values{"name": {"N26"}, "kind": {"asset"}, "currency": {"EUR"}})
+
+	body := get(t, srv, "/")
+	if got := strings.Count(body, `data-widget="accounts"`); got != 1 {
+		t.Fatalf("Accounts widgets = %d, want 1", got)
+	}
+	for _, want := range []string{
+		`data-account="1"`, `data-account="2"`,
+		`id="new-account-form" method="post" action="/accounts"`,
+		`id="show-new-account"`,
+		`class="new-account-row" id="new-account-row" hidden`,
+		`form="new-account-form" name="name"`,
+		`id="account-funds-1" hidden`, `id="account-funds-2" hidden`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<h3>Add an account</h3>") {
+		t.Error("account creation is still duplicated in the balance dialog")
+	}
+	if strings.Index(body, `id="new-account-row"`) > strings.Index(body, `data-account="1"`) {
+		t.Error("new account row is not at the top of the accounts table")
+	}
+	for _, id := range []string{"1", "2"} {
+		start := strings.Index(body, `data-account="`+id+`"`)
+		accountRow := body[start : start+strings.Index(body[start:], "</tr>")]
+		if strings.Contains(accountRow, `data-account-funds-toggle=`) {
+			t.Errorf("empty account %s renders a fund disclosure toggle", id)
+		}
+	}
+	if strings.Contains(body, `>Record balance</button>`) {
+		t.Error("dashboard still renders the redundant Record balance button")
+	}
+}
+
+func TestAccountCanBeCreatedWithOpeningBalance(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"New bank"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"cash"},
+		"amount": {"123.45"}, "as_of": {"2026-08-26"},
+	})
+
+	body := get(t, srv, "/")
+	row := body[strings.Index(body, `data-account="1"`):]
+	row = row[:strings.Index(row, "</tr>")]
+	if !strings.Contains(row, `data-balance-account="1"`) {
+		t.Error("account total does not open balance entry")
+	}
+	if !strings.Contains(row, `data-balance-name="New bank" data-balance-currency="CHF"`) {
+		t.Error("account total is missing balance dialog context")
+	}
+	if !strings.Contains(row, "123.45") || !strings.Contains(row, "as of 2026-08-26") {
+		t.Errorf("opening balance is missing from account row: %s", row)
+	}
+	if strings.Contains(body, "No balance") {
+		t.Error("accounts table still renders No balance text")
+	}
+	if strings.Contains(body, `<select name="account_id"`) {
+		t.Error("balance dialog still allows account selection")
+	}
+	if !strings.Contains(body, `<input type="hidden" name="account_id">`) {
+		t.Error("balance dialog is missing its fixed account ID")
+	}
+	if strings.Contains(body, "Record a cash balance") || strings.Contains(body, "Save balance") {
+		t.Error("balance dialog still contains duplicated copy")
+	}
+	if strings.Contains(body, `<th class="num">Cash</th>`) {
+		t.Error("Cash column is still rendered")
+	}
+}
+
+func TestFundsCanBeUpdatedInline(t *testing.T) {
+	srv := newTestServer(t)
+	seed(t, srv)
+	body := get(t, srv, "/")
+
+	for _, want := range []string{
+		`class="fund-name" data-fund-update="1"`,
+		`class="fund-update-row" id="fund-update-1" hidden`,
+		`action="/fund-updates" class="inline-fund-update"`,
+		`name="fund_id" value="1"`,
+		`action="/funds" class="inline-new-fund"`,
+		`class="new-fund-row" id="new-fund-1" hidden`,
+		`data-new-fund-account="1"`,
+		`data-account-funds-toggle="1"`,
+		`aria-controls="account-funds-1"`,
+		`class="icon close-new-fund"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<h3>Update a fund</h3>") {
+		t.Error("fund updates are still duplicated in the modal")
+	}
+}
+
+func TestFundCanBeCreatedInlineWithInitialHolding(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{"name": {"Broker"}, "kind": {"asset"}, "currency": {"CHF"}})
+	post(t, srv, "/funds", url.Values{
+		"account_id": {"1"}, "name": {"World ETF"}, "ticker": {"vwce"}, "currency": {"CHF"},
+		"class": {"stocks"}, "units": {"10"}, "price": {"87.40"}, "as_of": {"2026-08-26"},
+	})
+
+	body := get(t, srv, "/")
+	for _, want := range []string{"World ETF", "VWCE", "87.40", "874.00", `data-fund-update="1"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("new fund is missing %q", want)
+		}
 	}
 }
 
@@ -683,6 +998,74 @@ func TestCategoryRuleAppliesToOldAndNewEntries(t *testing.T) {
 	}
 	if !strings.Contains(august, "1,947.00") {
 		t.Error("the August entry is missing")
+	}
+}
+
+func TestCategoryRuleSupportsAllTerms(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"}, "new_category": {"Other"}, "note": {"IHLY THOMAS KILLWANGEN"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"50"}, "currency": {"CHF"}, "new_category": {"Other"}, "note": {"THOMAS MUELLER"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(url.Values{
+		"mode": {"all"}, "pattern": {"ihly\nthomas"}, "new_category": {"Rent"},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "1+existing") {
+		t.Fatalf("Location = %q, want one moved entry", location)
+	}
+
+	page := get(t, srv, "/expenses?month=2026-08")
+	if strings.Count(page, `<option value="Rent" selected>Rent</option>`) != 1 {
+		t.Error("AND rule did not move exactly one matching entry")
+	}
+	if !strings.Contains(page, `<span class="pill cur">AND</span>`) || !strings.Contains(page, "ihly\nthomas") {
+		t.Error("saved AND rule is not rendered with its terms")
+	}
+}
+
+func TestCategoryRuleCanBeEditedAndShowsMatchCount(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"}, "new_category": {"Other"}, "note": {"MIGROS CITY ZURICH"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"50"}, "currency": {"CHF"}, "new_category": {"Other"}, "note": {"MIGROS BASEL"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+	post(t, srv, "/rules", url.Values{
+		"mode": {"any"}, "pattern": {"coop"}, "new_category": {"Groceries"},
+	})
+
+	page := get(t, srv, "/expenses?month=2026-08")
+	if !strings.Contains(page, `data-rule-id="1"`) || !strings.Contains(page, ">0 entries</td>") {
+		t.Error("saved rule does not show its zero match count or edit control")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/rules/1", strings.NewReader(url.Values{
+		"mode": {"all"}, "pattern": {"migros\nzurich"}, "new_category": {"Food"}, "subcategory": {"Supermarket"},
+	}.Encode()))
+	req.SetPathValue("id", "1")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "1+existing") {
+		t.Fatalf("Location = %q, want one moved entry", location)
+	}
+
+	page = get(t, srv, "/expenses?month=2026-08")
+	for _, want := range []string{
+		`data-rule-mode="all"`, `data-rule-pattern="migros`, "zurich",
+		`data-rule-category="Food"`, `data-rule-subcategory="Supermarket"`,
+		`name="subcategory" value="Supermarket"`, `>1 entry</td>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("updated rule page missing %q", want)
+		}
 	}
 }
 

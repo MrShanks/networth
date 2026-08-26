@@ -226,6 +226,34 @@ func TestSetExpenseCategoryKeepsKindInSync(t *testing.T) {
 	}
 }
 
+func TestSetExpenseSubcategory(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "subcategories.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+	if err := store.AddEntry(t.Context(), KindExpense, "2026-08-01", "Groceries", "MIGROS", "CHF", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetExpenseSubcategory(t.Context(), 1, " Supermarket "); err != nil {
+		t.Fatal(err)
+	}
+	expenses, err := store.Expenses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expenses) != 1 || expenses[0].Subcategory != "Supermarket" {
+		t.Fatalf("expenses = %+v", expenses)
+	}
+	if err := store.SetExpenseSubcategory(t.Context(), 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	expenses, err = store.Expenses(t.Context())
+	if err != nil || expenses[0].Subcategory != "" {
+		t.Fatalf("cleared expenses = %+v, err = %v", expenses, err)
+	}
+}
+
 func TestByCategory(t *testing.T) {
 	report := BuildExpenseReport(testExpenses(), map[string]float64{"CHF": 1, "USD": 0.8})
 
@@ -269,6 +297,35 @@ func TestByCategory(t *testing.T) {
 
 	if got := (ExpenseReport{}).ByCategory(); got != nil {
 		t.Errorf("ByCategory on an empty report = %v, want nil", got)
+	}
+}
+
+func TestBySubcategory(t *testing.T) {
+	report := BuildExpenseReport([]Expense{
+		{AsOf: "2026-07-01", Category: "Food", Subcategory: "Supermarket", Currency: "CHF", Amount: 10000},
+		{AsOf: "2026-07-02", Category: "Food", Subcategory: "Restaurants", Currency: "USD", Amount: 5000},
+		{AsOf: "2026-08-01", Category: "Food", Currency: "CHF", Amount: 2500},
+		{AsOf: "2026-08-02", Category: "Travel", Subcategory: "Train", Currency: "CHF", Amount: 3000},
+	}, map[string]float64{"CHF": 1, "USD": 0.8})
+
+	if got := report.BySubcategory("", "2026-08"); got != nil {
+		t.Fatalf("BySubcategory with no category = %v, want nil", got)
+	}
+	got := report.BySubcategory("food", "2026-08")
+	if len(got) != 3 {
+		t.Fatalf("got %d subcategories, want 3: %+v", len(got), got)
+	}
+	if got[0].Subcategory != "Supermarket" || got[0].Total != 10000 {
+		t.Errorf("first subcategory = %+v, want Supermarket CHF 100", got[0])
+	}
+	if got[1].Subcategory != "Restaurants" || got[1].Total != 4000 {
+		t.Errorf("converted subcategory = %+v, want Restaurants CHF 40", got[1])
+	}
+	if got[2].Subcategory != "Uncategorized" || got[2].Total != 2500 {
+		t.Errorf("empty subcategory = %+v, want Uncategorized CHF 25", got[2])
+	}
+	if got[0].CurrentMonth != 0 || got[1].CurrentMonth != 0 || got[2].CurrentMonth != 2500 {
+		t.Errorf("current month amounts = %+v, want only Uncategorized CHF 25", got)
 	}
 }
 

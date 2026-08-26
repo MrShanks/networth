@@ -7,29 +7,15 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+{{template "navbar" "expenses"}}
 <header class="page-head">
-  <div>
-    <h1>Expenses</h1>
-    <nav>
-      <a href="/">Net worth</a>
-      <a class="current" href="/expenses">Expenses</a>
-      <a href="/records">Records</a>
-      <a href="/retire">Retirement</a>
-    </nav>
-  </div>
-  <form class="month-picker" method="get" action="/expenses">
-    <label><span>Viewing</span>
-      <input type="month" name="month" value="{{.Month.Month}}" onchange="this.form.requestSubmit()">
-    </label>
-  </form>
-  <p class="sub">
-    Monthly spending, totalled in {{.Base}} at the current rate.
-    <button type="button" class="link" id="reset-layout">Reset layout</button>
-  </p>
+  <h1 class="sr-only">Expenses</h1>
   <div class="toolbar">
-    <button type="button" class="pill-btn" onclick="entryDialog.showModal()">Add an entry</button>
-    <button type="button" class="pill-btn" onclick="importDialog.showModal()">Import from your bank</button>
-    <button type="button" class="pill-btn" onclick="rulesDialog.showModal()">Category rules</button>
+    <form class="month-picker" method="get" action="/expenses">
+      <label><span>Viewing</span>
+        <input type="month" name="month" value="{{.Month.Month}}" onchange="this.form.requestSubmit()">
+      </label>
+    </form>
   </div>
 </header>
 
@@ -132,6 +118,8 @@
   <div class="widget-body">
     <form class="comparison-pickers" method="get" action="/expenses#month-comparison">
       <input type="hidden" name="month" value="{{.Month.Month}}">
+      <input type="hidden" name="compare_year_a" value="{{.YearComparison.Left.Month}}">
+      <input type="hidden" name="compare_year_b" value="{{.YearComparison.Right.Month}}">
       <label>From
         <input type="month" name="compare_a" value="{{.Comparison.Left.Month}}" onchange="this.form.requestSubmit()">
       </label>
@@ -160,6 +148,45 @@
       </table>
     {{else}}
       <p class="empty">No spending recorded for either month.</p>
+    {{end}}
+  </div>
+</section>
+
+<section class="widget comparison" id="year-comparison" data-widget="year-comparison" data-span="2">
+  {{template "widgethead" (printf "Compare years (%s)" .Base)}}
+  <div class="widget-body">
+    <form class="comparison-pickers" method="get" action="/expenses#year-comparison">
+      <input type="hidden" name="month" value="{{.Month.Month}}">
+      <input type="hidden" name="compare_a" value="{{.Comparison.Left.Month}}">
+      <input type="hidden" name="compare_b" value="{{.Comparison.Right.Month}}">
+      <label>From
+        <input type="number" name="compare_year_a" min="1900" max="2100" value="{{.YearComparison.Left.Month}}" onchange="this.form.requestSubmit()">
+      </label>
+      <label>To
+        <input type="number" name="compare_year_b" min="1900" max="2100" value="{{.YearComparison.Right.Month}}" onchange="this.form.requestSubmit()">
+      </label>
+    </form>
+    <table class="comparison-summary">
+      <thead><tr><th></th><th class="num">{{.YearComparison.Left.Month}}</th><th class="num">{{.YearComparison.Right.Month}}</th><th class="num">Change</th></tr></thead>
+      <tbody>
+        <tr><td>Spending</td><td class="num">{{.YearComparison.Left.Total}}</td><td class="num">{{.YearComparison.Right.Total}}</td><td class="num {{if gt .YearComparison.Right.Total .YearComparison.Left.Total}}down{{else}}up{{end}}">{{if ge .YearComparison.Right.Total .YearComparison.Left.Total}}+{{end}}{{subAmount .YearComparison.Right.Total .YearComparison.Left.Total}}</td></tr>
+        <tr><td>Income</td><td class="num">{{.YearComparison.Left.Income}}</td><td class="num">{{.YearComparison.Right.Income}}</td><td class="num {{if lt .YearComparison.Right.Income .YearComparison.Left.Income}}down{{else}}up{{end}}">{{if ge .YearComparison.Right.Income .YearComparison.Left.Income}}+{{end}}{{subAmount .YearComparison.Right.Income .YearComparison.Left.Income}}</td></tr>
+        <tr><td>Taxes</td><td class="num">{{.YearComparison.Left.Taxes}}</td><td class="num">{{.YearComparison.Right.Taxes}}</td><td class="num {{if gt .YearComparison.Right.Taxes .YearComparison.Left.Taxes}}down{{else}}up{{end}}">{{if ge .YearComparison.Right.Taxes .YearComparison.Left.Taxes}}+{{end}}{{subAmount .YearComparison.Right.Taxes .YearComparison.Left.Taxes}}</td></tr>
+        <tr><td>Saved</td><td class="num">{{.YearComparison.Left.Saved}}</td><td class="num">{{.YearComparison.Right.Saved}}</td><td class="num {{if lt .YearComparison.Right.Saved .YearComparison.Left.Saved}}down{{else}}up{{end}}">{{if ge .YearComparison.Right.Saved .YearComparison.Left.Saved}}+{{end}}{{subAmount .YearComparison.Right.Saved .YearComparison.Left.Saved}}</td></tr>
+      </tbody>
+    </table>
+    {{if .YearComparison.Categories}}
+      <h3>Spending by category</h3>
+      <table>
+        <thead><tr><th>Category</th><th class="num">{{.YearComparison.Left.Month}}</th><th class="num">{{.YearComparison.Right.Month}}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+        {{range .YearComparison.Categories}}
+          <tr><td>{{.Category}}</td><td class="num">{{.Left}}</td><td class="num">{{.Right}}</td><td class="num {{if gt .Change 0}}down{{else}}up{{end}}">{{if ge .Change 0}}+{{end}}{{.Change}}</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty">No spending recorded for either year.</p>
     {{end}}
   </div>
 </section>
@@ -285,10 +312,108 @@
   </div>
 </section>
 
+<section class="widget" id="by-subcategory" data-widget="by-subcategory" data-span="2">
+  {{template "widgethint" dict "Title" "Spending by secondary category" "Hint"
+    (printf "Choose a primary category to see its secondary-category totals in %s." .Base)}}
+  <div class="widget-body">
+    <form class="category-picker" method="get" action="/expenses#by-subcategory">
+      <input type="hidden" name="month" value="{{.Month.Month}}">
+      <label>Primary category
+        <select name="secondary_category" onchange="this.form.requestSubmit()">
+          <option value="">Select a category</option>
+          {{range .Categories}}
+            <option value="{{.}}" {{if eq . $.SecondaryCategory}}selected{{end}}>{{.}}</option>
+          {{end}}
+        </select>
+      </label>
+    </form>
+    <div class="subcategory-table-wrap">
+      <table class="subcategory-summary">
+        <thead><tr><th>Secondary category</th><th class="num">{{monthName .Month.Month}}</th><th class="num">Total</th><th class="num">Share</th></tr></thead>
+        <tbody>
+        {{if .SecondaryCategory}}
+          {{range .BySubcategory}}
+            <tr><td>{{.Subcategory}}</td><td class="num">{{.CurrentMonth}}</td><td class="num">{{.Total}}</td><td class="num">{{printf "%.0f" .Share}}%</td></tr>
+          {{end}}
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="widget rules-widget" data-widget="rules" data-span="2">
+  <header class="widget-head">
+    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">Category rules</span></h2>
+    <div class="widget-tools">
+      <button type="button" class="pill-btn widget-action" id="show-rule-form"
+              aria-expanded="false" aria-controls="rule-form">Add rule</button>
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+  <div class="widget-body">
+    <form method="post" action="/rules" class="stack rule-editor" id="rule-form" hidden>
+      <label>Match
+        <select name="mode" id="rule-mode">
+          <option value="any">Any term (OR)</option>
+          <option value="all">All terms (AND)</option>
+          <option value="regex">Regular expression</option>
+        </select>
+      </label>
+      <label class="wide"><span><span id="rule-pattern-label">Terms, one per line</span><span class="required-mark" aria-hidden="true">*</span></span>
+        <textarea name="pattern" id="rule-pattern" rows="3" placeholder="migros&#10;coop" required maxlength="500"></textarea>
+      </label>
+      <label><span>Put it in<span class="required-mark" aria-hidden="true">*</span></span>
+        <input type="text" name="new_category" list="categories" placeholder="Rent" required maxlength="40">
+      </label>
+      <label>Subcategory
+        <input type="text" name="subcategory" placeholder="Home" maxlength="40">
+      </label>
+      <span class="modal-action inline-actions">
+        <button type="submit" id="rule-submit">Save rule</button>
+        <button type="button" class="pill-btn" id="cancel-rule-edit">Cancel</button>
+      </span>
+    </form>
+    {{if .Rules}}
+      <div class="rules-table-wrap">
+        <table class="tight rules-table">
+          <tbody>
+          {{range .Rules}}
+            <tr>
+              <td><span class="pill cur">{{if eq .Mode "all"}}AND{{else if eq .Mode "regex"}}Regex{{else}}OR{{end}}</span></td>
+              <td class="empty rule-pattern">{{.Pattern}}</td>
+              <td><span class="pill cur">{{.Category}}</span>{{with .Subcategory}} <span class="pill subcategory">{{.}}</span>{{end}}</td>
+              <td class="num empty small">{{.Matches}} {{if eq .Matches 1}}entry{{else}}entries{{end}}</td>
+              <td class="num">
+                <button type="button" class="icon edit-rule" title="Edit rule" aria-label="Edit rule"
+                        data-rule-id="{{.ID}}" data-rule-mode="{{.Mode}}"
+                        data-rule-pattern="{{.Pattern}}" data-rule-category="{{.Category}}"
+                        data-rule-subcategory="{{.Subcategory}}">&#9998;</button>
+              </td>
+              <td class="num">
+                <form method="post" action="/rules/{{.ID}}/delete">
+                  <button class="icon danger" type="submit" aria-label="Delete rule" title="Delete rule">&#128465;</button>
+                </form>
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+    {{else}}
+      <p class="empty">No category rules yet.</p>
+    {{end}}
+  </div>
+</section>
+
 <section class="widget" id="entries" data-widget="entries" data-span="2">
   <header class="widget-head">
-    <h2>{{.EntryTitle}}{{with .Category}} <a class="clear-filter" href="/expenses?month={{$.Month.Month}}#entries">Clear</a>{{end}}</h2>
+    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.EntryTitle}}</span>{{with .Category}} <a class="clear-filter" href="/expenses?month={{$.Month.Month}}#entries">Clear</a>{{end}}</h2>
     <div class="widget-tools">
+      <button type="button" class="pill-btn widget-action" onclick="entryDialog.showModal()">Add</button>
+      <button type="button" class="pill-btn widget-action" onclick="importDialog.showModal()">Import</button>
       {{if and .Month.Expenses (not .Category)}}
         <form method="post" action="/expenses/month/{{.Month.Month}}/delete"
               onsubmit="return confirm('Delete all {{len .Month.Expenses}} entries of {{monthName .Month.Month}}?')">
@@ -302,14 +427,20 @@
   </header>
   <div class="widget-body">
     {{if .Entries}}
-      <table>
-        <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead>
+      <table class="entries-table" data-sortable-entries>
+        <thead><tr>
+          <th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="date" data-sort-type="text">Date</button></th>
+          <th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="category" data-sort-type="text">Category</button></th>
+          <th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="note" data-sort-type="text">Note</button></th>
+          <th class="num" aria-sort="none"><button type="button" class="sort-heading" data-sort-column="amount" data-sort-type="number">Amount</button></th>
+          <th></th>
+        </tr></thead>
         <tbody>
         {{range .Entries}}
           {{$entry := .}}
-          <tr>
-            <td>{{.AsOf}}</td>
-            <td>
+          <tr data-entry-id="{{.ID}}">
+            <td data-sort-value="{{.AsOf}}">{{.AsOf}}</td>
+            <td data-sort-value="{{.Category}}">
               <form class="entry-category-form" method="post" action="/expenses/{{.ID}}/category">
                 <input type="hidden" name="month" value="{{$.Month.Month}}">
                 <select class="pill entry-category {{if .IsIncome}}bought{{else if .IsTax}}liability{{else}}cur{{end}}"
@@ -318,9 +449,15 @@
                   {{range $.Categories}}<option value="{{.}}"{{if eq . $entry.Category}} selected{{end}}>{{.}}</option>{{end}}
                 </select>
               </form>
+              <form class="entry-subcategory-form" method="post" action="/expenses/{{.ID}}/subcategory">
+                <input type="hidden" name="month" value="{{$.Month.Month}}">
+                <input class="pill entry-subcategory" name="subcategory" value="{{.Subcategory}}"
+                       placeholder="Add tag" aria-label="Subcategory for {{.Note}}" title="Subcategory"
+                       maxlength="40" onchange="this.form.requestSubmit()">
+              </form>
             </td>
-            <td class="empty">{{.Note}}</td>
-            <td class="num {{if .IsIncome}}up{{else}}down{{end}}">
+            <td class="empty" data-sort-value="{{.Note}}">{{.Note}}</td>
+            <td class="num {{if .IsIncome}}up{{else}}down{{end}}" data-sort-value="{{if .IsIncome}}{{.Amount}}{{else}}-{{absAmount .Amount}}{{end}}">
               {{if .IsIncome}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}
             </td>
             <td class="num">
@@ -341,40 +478,82 @@
 
 </div>
 
-<dialog id="rulesDialog" class="modal">
-  <header class="modal-head">
-    <h2>Category rules</h2>
-    <button type="button" class="icon" onclick="rulesDialog.close()" aria-label="Close">&times;</button>
-  </header>
-  <div class="modal-body">
-    <form method="post" action="/rules" class="stack modal-form">
-      <label class="wide">When the description contains
-        <input type="text" name="pattern" placeholder="IHLY THOMAS" required maxlength="80">
-      </label>
-      <label class="wide">Put it in
-        <input type="text" name="new_category" list="categories" placeholder="Rent" required maxlength="40">
-      </label>
-      <button class="modal-action" type="submit">Save rule</button>
-    </form>
-    {{if .Rules}}
-      <table class="tight">
-        <tbody>
-        {{range .Rules}}
-          <tr>
-            <td class="empty">{{.Pattern}}</td>
-            <td><span class="pill cur">{{.Category}}</span></td>
-            <td class="num">
-              <form method="post" action="/rules/{{.ID}}/delete">
-                <button class="icon danger" type="submit" aria-label="Delete rule" title="Delete rule">&#128465;</button>
-              </form>
-            </td>
-          </tr>
-        {{end}}
-        </tbody>
-      </table>
-    {{end}}
-  </div>
-</dialog>
+<script>
+  document.querySelectorAll('[data-sortable-entries]').forEach((table) => {
+    const body = table.tBodies[0];
+    const headers = [...table.querySelectorAll('[data-sort-column]')];
+    headers.forEach((button, columnIndex) => {
+      button.addEventListener('click', () => {
+        const heading = button.closest('th');
+        const ascending = heading.getAttribute('aria-sort') !== 'ascending';
+        table.querySelectorAll('th[aria-sort]').forEach((th) => th.setAttribute('aria-sort', 'none'));
+        heading.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+        const numeric = button.dataset.sortType === 'number';
+        const rows = [...body.rows];
+        rows.sort((left, right) => {
+          const leftValue = left.cells[columnIndex].dataset.sortValue || '';
+          const rightValue = right.cells[columnIndex].dataset.sortValue || '';
+          const compared = numeric
+            ? Number(leftValue.replaceAll(',', '')) - Number(rightValue.replaceAll(',', ''))
+            : leftValue.localeCompare(rightValue, undefined, {sensitivity: 'base'});
+          return (ascending ? compared : -compared) || Number(left.dataset.entryId) - Number(right.dataset.entryId);
+        });
+        body.append(...rows);
+      });
+    });
+  });
+</script>
+
+<script>
+  const ruleMode = document.getElementById('rule-mode');
+  const rulePattern = document.getElementById('rule-pattern');
+  const rulePatternLabel = document.getElementById('rule-pattern-label');
+  const ruleForm = document.getElementById('rule-form');
+  const ruleSubmit = document.getElementById('rule-submit');
+  const cancelRuleEdit = document.getElementById('cancel-rule-edit');
+  const showRuleForm = document.getElementById('show-rule-form');
+  function updateRulePatternHelp() {
+    const regex = ruleMode.value === 'regex';
+    rulePatternLabel.textContent = regex ? 'Regular expression' : 'Terms, one per line';
+    rulePattern.placeholder = regex ? '^(migros|coop)\\b' : 'migros\ncoop';
+  }
+  function resetRuleForm() {
+    ruleForm.reset();
+    ruleForm.action = '/rules';
+    ruleSubmit.textContent = 'Save rule';
+    ruleForm.hidden = true;
+    showRuleForm.setAttribute('aria-expanded', 'false');
+    updateRulePatternHelp();
+  }
+  ruleMode?.addEventListener('change', updateRulePatternHelp);
+  showRuleForm?.addEventListener('click', () => {
+    ruleForm.hidden = false;
+    showRuleForm.setAttribute('aria-expanded', 'true');
+    rulePattern.focus();
+    window.dispatchEvent(new Event('resize'));
+  });
+  document.querySelector('.rules-table tbody')?.addEventListener('click', (event) => {
+    const edit = event.target.closest('.edit-rule');
+    if (!edit) return;
+    ruleForm.hidden = false;
+    showRuleForm.setAttribute('aria-expanded', 'true');
+    ruleForm.action = `/rules/${edit.dataset.ruleId}`;
+    ruleMode.value = edit.dataset.ruleMode;
+    rulePattern.value = edit.dataset.rulePattern;
+    ruleForm.querySelector('[name="new_category"]').value = edit.dataset.ruleCategory;
+    ruleForm.querySelector('[name="subcategory"]').value = edit.dataset.ruleSubcategory;
+    ruleSubmit.textContent = 'Update rule';
+    cancelRuleEdit.hidden = false;
+    updateRulePatternHelp();
+    rulePattern.focus();
+    window.dispatchEvent(new Event('resize'));
+  });
+  cancelRuleEdit?.addEventListener('click', () => {
+    resetRuleForm();
+    showRuleForm.focus();
+    window.dispatchEvent(new Event('resize'));
+  });
+</script>
 
 <script src="/static/board.js"></script>
 </body>

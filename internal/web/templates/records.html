@@ -31,19 +31,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Records</h1>
-  <nav>
-    <a href="/">Net worth</a>
-    <a href="/expenses">Expenses</a>
-    <a class="current" href="/records">Records</a>
-    <a href="/retire">Retirement</a>
-  </nav>
-  <p class="sub">
-    Your best and worst months, in {{.Base}}.
-    <button type="button" class="link" id="reset-layout">Reset layout</button>
-  </p>
-</header>
+{{template "navbar" "records"}}
+<h1 class="sr-only">Records</h1>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
 

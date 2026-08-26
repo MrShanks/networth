@@ -7,16 +7,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Import</h1>
-  <nav>
-    <a href="/">Net worth</a>
-    <a href="/expenses">Expenses</a>
-    <a href="/records">Records</a>
-    <a href="/retire">Retirement</a>
-  </nav>
-  <p class="sub">What came out of your bank export.</p>
-</header>
+{{template "navbar" "expenses"}}
+<h1 class="sr-only">Import expenses</h1>
 
 <section class="cards">
   <div class="card">
