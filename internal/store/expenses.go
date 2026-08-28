@@ -672,9 +672,6 @@ func neutraliseInternalTransfers(existing, incoming []Expense) map[int64]bool {
 	matchedExisting := map[int64]bool{}
 	all := append(slices.Clone(existing), incoming...)
 	for i := range all {
-		if all[i].Kind == KindTransfer {
-			continue
-		}
 		for j := i + 1; j < len(all); j++ {
 			if !oppositeInternalTransfer(all[i], all[j]) {
 				continue
@@ -695,7 +692,7 @@ func neutraliseInternalTransfers(existing, incoming []Expense) map[int64]bool {
 }
 
 func oppositeInternalTransfer(a, b Expense) bool {
-	return ((a.Kind == KindIncome && b.Kind == KindExpense) ||
-		(a.Kind == KindExpense && b.Kind == KindIncome)) &&
-		a.AsOf == b.AsOf && a.Amount == b.Amount
+	oppositeKinds := (a.Kind == KindIncome && (b.Kind == KindExpense || b.Kind == KindTransfer)) ||
+		(b.Kind == KindIncome && (a.Kind == KindExpense || a.Kind == KindTransfer))
+	return oppositeKinds && a.AsOf == b.AsOf && a.Amount == b.Amount
 }

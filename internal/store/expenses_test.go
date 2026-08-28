@@ -93,6 +93,26 @@ func TestImportPairsSameDayOppositeAmountsAcrossImports(t *testing.T) {
 	}
 }
 
+func TestImportPairsBankLabelledTransferWithIncome(t *testing.T) {
+	store := openTestStore(t)
+	rows := []Expense{
+		{Kind: KindTransfer, AsOf: "2026-07-15", Category: "Account transfers", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-07-15", Category: "Other income", Currency: "CHF", Amount: 100000},
+	}
+	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.Expenses(t.Context())
+	if err != nil || len(entries) != 2 || entries[0].Kind != KindTransfer || entries[1].Kind != KindTransfer {
+		t.Fatalf("paired entries = %+v, err %v", entries, err)
+	}
+	report := BuildExpenseReport(entries, map[string]float64{"CHF": 1})
+	month, _ := report.Find("2026-07")
+	if month.Income != 0 || len(month.Expenses) != 0 {
+		t.Fatalf("neutral pair remains in report: %+v", month)
+	}
+}
+
 func TestImportDoesNotPairTransfersOnDifferentDaysOrAmounts(t *testing.T) {
 	store := openTestStore(t)
 	rows := []Expense{
