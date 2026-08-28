@@ -11,18 +11,19 @@ import (
 )
 
 type graphsData struct {
-	Base              string
-	Salary            Chart
-	Income            Chart
-	NetWorth          Chart
-	Investments       Chart
-	CashFlow          GroupedBarChart
-	SavingsRate       Chart
-	TaxRate           Chart
-	AllocationHistory StackedChart
-	ExpenseHistory    StackedChart
-	YearlyTaxes       BarChart
-	Error             string
+	Base                string
+	Salary              Chart
+	SalaryBySubcategory StackedChart
+	Income              Chart
+	NetWorth            Chart
+	Investments         Chart
+	CashFlow            GroupedBarChart
+	SavingsRate         Chart
+	TaxRate             Chart
+	AllocationHistory   StackedChart
+	ExpenseHistory      StackedChart
+	YearlyTaxes         BarChart
+	Error               string
 }
 
 func (s *Server) handleGraphs(w http.ResponseWriter, r *http.Request) {
@@ -33,18 +34,19 @@ func (s *Server) handleGraphs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "graphs.html", graphsData{
-		Base:              store.Base,
-		Salary:            buildSalaryChart(v.report.Months),
-		Income:            buildIncomeChart(v.report.Months),
-		NetWorth:          buildChart(v.ledger.History()),
-		Investments:       buildInvestChart(v.ledger.InvestHistory()),
-		CashFlow:          buildCashFlowBars(v.report.Months),
-		SavingsRate:       buildSavingsRateChart(v.report.Months),
-		TaxRate:           buildTaxRateChart(v.report.Months),
-		AllocationHistory: buildAllocationHistory(v.ledger),
-		ExpenseHistory:    buildExpenseHistory(v.report.Months),
-		YearlyTaxes:       buildYearlyTaxBars(v.report.Months),
-		Error:             r.URL.Query().Get("err"),
+		Base:                store.Base,
+		Salary:              buildSalaryChart(v.report.Months),
+		SalaryBySubcategory: buildSalaryBySubcategory(v.report.Months),
+		Income:              buildIncomeChart(v.report.Months),
+		NetWorth:            buildChart(v.ledger.History()),
+		Investments:         buildInvestChart(v.ledger.InvestHistory()),
+		CashFlow:            buildCashFlowBars(v.report.Months),
+		SavingsRate:         buildSavingsRateChart(v.report.Months),
+		TaxRate:             buildTaxRateChart(v.report.Months),
+		AllocationHistory:   buildAllocationHistory(v.ledger),
+		ExpenseHistory:      buildExpenseHistory(v.report.Months),
+		YearlyTaxes:         buildYearlyTaxBars(v.report.Months),
+		Error:               r.URL.Query().Get("err"),
 	})
 }
 
@@ -75,6 +77,55 @@ type StackedChart struct {
 
 func buildSalaryChart(months []store.ExpenseMonth) Chart {
 	return buildMonthlyAmountChart(months, func(month store.ExpenseMonth) money.Amount { return month.Salary })
+}
+
+func buildSalaryBySubcategory(months []store.ExpenseMonth) StackedChart {
+	totals := map[string]money.Amount{}
+	for _, month := range months {
+		for _, subcategory := range month.IncomeSubcategories {
+			if salaryCategory(subcategory.Category) {
+				totals[subcategory.Subcategory] += subcategory.Total
+			}
+		}
+	}
+	labels := make([]string, 0, len(totals))
+	for label := range totals {
+		labels = append(labels, label)
+	}
+	sort.Slice(labels, func(i, j int) bool { return totals[labels[i]] > totals[labels[j]] })
+	if len(labels) > 7 {
+		labels = labels[:7]
+	}
+	classes := make([]string, len(labels))
+	values := make([][]float64, len(labels))
+	indexes := make(map[string]int, len(labels))
+	for i, label := range labels {
+		classes[i] = fmt.Sprintf("series-%d", i+1)
+		indexes[label] = i
+	}
+	dates := make([]string, len(months))
+	for monthIndex, month := range months {
+		dates[monthIndex] = month.Month
+		for _, subcategory := range month.IncomeSubcategories {
+			seriesIndex, ok := indexes[subcategory.Subcategory]
+			if ok && salaryCategory(subcategory.Category) {
+				values[seriesIndex] = appendValue(values[seriesIndex], monthIndex, subcategory.Total.Float())
+			}
+		}
+		for i := range values {
+			values[i] = appendValue(values[i], monthIndex, 0)
+		}
+	}
+	return buildStackedChart(dates, labels, classes, values)
+}
+
+func salaryCategory(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "salary", "salary & pensions":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildIncomeChart(months []store.ExpenseMonth) Chart {

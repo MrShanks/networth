@@ -197,6 +197,43 @@ func TestGraphsSeparateSalaryIncomeAndYearlyTaxes(t *testing.T) {
 	}
 }
 
+func TestGraphsShowSalaryBySecondaryCategory(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary"}, "kind": {"income"}, "as_of": {"2026-01-20"}},
+		{"amount": {"3000"}, "currency": {"CHF"}, "new_category": {"Salary & pensions"}, "kind": {"income"}, "as_of": {"2026-01-21"}},
+		{"amount": {"5100"}, "currency": {"CHF"}, "new_category": {"Salary"}, "kind": {"income"}, "as_of": {"2026-02-20"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		subcategory := "Primary job"
+		if entry.Category == "Salary & pensions" {
+			subcategory = "Pension"
+		}
+		if err := srv.store.SetExpenseSubcategory(t.Context(), entry.ID, subcategory); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page := get(t, srv, "/graphs")
+	start := strings.Index(page, `data-widget="salary-by-subcategory"`)
+	end := strings.Index(page, `data-widget="monthly-income"`)
+	if start < 0 || end <= start {
+		t.Fatal("salary-by-secondary-category graph is missing")
+	}
+	panel := page[start:end]
+	for _, want := range []string{"Salary by secondary category", "Primary job", "Pension", `class="stack-band series-1"`, "2026-01", "2026-02"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("salary secondary-category graph is missing %q", want)
+		}
+	}
+}
+
 func TestDashboardShowsConvertedTotals(t *testing.T) {
 	srv := newTestServer(t)
 	seed(t, srv)

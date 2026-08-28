@@ -284,7 +284,7 @@ func TestIncomeGivesTheMonthsSaving(t *testing.T) {
 
 func TestIncomeCategoriesAreConvertedSortedAndAggregatedByYear(t *testing.T) {
 	report := BuildExpenseReport([]Expense{
-		{Kind: KindIncome, AsOf: "2026-07-01", Category: "Salary", Currency: "CHF", Amount: 500000},
+		{Kind: KindIncome, AsOf: "2026-07-01", Category: "Salary", Subcategory: "Primary job", Currency: "CHF", Amount: 500000},
 		{Kind: KindIncome, AsOf: "2026-07-02", Category: "Bonus", Currency: "USD", Amount: 100000},
 		{Kind: KindIncome, AsOf: "2026-08-01", Category: "Salary", Currency: "CHF", Amount: 510000},
 	}, map[string]float64{"CHF": 1, "USD": 0.8})
@@ -297,10 +297,16 @@ func TestIncomeCategoriesAreConvertedSortedAndAggregatedByYear(t *testing.T) {
 	if july.IncomeCategories[1].Share < 13.7 || july.IncomeCategories[1].Share > 13.9 {
 		t.Errorf("Bonus share = %.1f, want about 13.8", july.IncomeCategories[1].Share)
 	}
+	if len(july.IncomeSubcategories) != 1 || july.IncomeSubcategories[0].Subcategory != "Primary job" || july.IncomeSubcategories[0].Total != 500000 {
+		t.Fatalf("July income subcategories = %+v", july.IncomeSubcategories)
+	}
 	year := report.Year("2026")
 	if len(year.IncomeCategories) != 2 || year.IncomeCategories[0].Category != "Salary" ||
 		year.IncomeCategories[0].Total != 1010000 || year.IncomeCategories[1].Total != 80000 {
 		t.Fatalf("year income categories = %+v", year.IncomeCategories)
+	}
+	if len(year.IncomeSubcategories) != 1 || year.IncomeSubcategories[0].Total != 500000 {
+		t.Fatalf("year income subcategories = %+v", year.IncomeSubcategories)
 	}
 }
 

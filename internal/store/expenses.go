@@ -271,16 +271,17 @@ type SubcategoryTotal struct {
 
 // ExpenseMonth aggregates one calendar month of cash flow.
 type ExpenseMonth struct {
-	Month            string
-	Total            money.Amount // spending, net of refunds, in the base currency
-	Refunds          money.Amount // what came back, as a positive number
-	Income           money.Amount
-	Salary           money.Amount
-	Taxes            money.Amount
-	Categories       []CategoryTotal
-	IncomeCategories []CategoryTotal
-	Subcategories    []SubcategoryTotal
-	Expenses         []Expense // every entry of the month, newest first
+	Month               string
+	Total               money.Amount // spending, net of refunds, in the base currency
+	Refunds             money.Amount // what came back, as a positive number
+	Income              money.Amount
+	Salary              money.Amount
+	Taxes               money.Amount
+	Categories          []CategoryTotal
+	IncomeCategories    []CategoryTotal
+	IncomeSubcategories []SubcategoryTotal
+	Subcategories       []SubcategoryTotal
+	Expenses            []Expense // every entry of the month, newest first
 }
 
 // Saved is what was left of the month's income.
@@ -307,6 +308,7 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 	total := ExpenseMonth{Month: year}
 	byCategory := make(map[string]money.Amount)
 	byIncomeCategory := make(map[string]money.Amount)
+	byIncomeSubcategory := make(map[string]map[string]money.Amount)
 	bySubcategory := make(map[string]map[string]money.Amount)
 	for _, month := range r.Months {
 		if strings.HasPrefix(month.Month, year) {
@@ -320,6 +322,12 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 			}
 			for _, category := range month.IncomeCategories {
 				byIncomeCategory[category.Category] += category.Total
+			}
+			for _, subcategory := range month.IncomeSubcategories {
+				if byIncomeSubcategory[subcategory.Category] == nil {
+					byIncomeSubcategory[subcategory.Category] = make(map[string]money.Amount)
+				}
+				byIncomeSubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
 			}
 			for _, subcategory := range month.Subcategories {
 				if bySubcategory[subcategory.Category] == nil {
@@ -343,6 +351,13 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 			row.Share = float64(amount) / float64(total.Income) * 100
 		}
 		total.IncomeCategories = append(total.IncomeCategories, row)
+	}
+	for category, subcategories := range byIncomeSubcategory {
+		for subcategory, amount := range subcategories {
+			total.IncomeSubcategories = append(total.IncomeSubcategories, SubcategoryTotal{
+				Category: category, Subcategory: subcategory, Total: amount,
+			})
+		}
 	}
 	for category, subcategories := range bySubcategory {
 		for subcategory, amount := range subcategories {
@@ -554,6 +569,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 	byMonth := map[string]*ExpenseMonth{}
 	byCategory := map[string]map[string]money.Amount{}
 	byIncomeCategory := map[string]map[string]money.Amount{}
+	byIncomeSubcategory := map[string]map[string]map[string]money.Amount{}
 	bySubcategory := map[string]map[string]map[string]money.Amount{}
 
 	for _, e := range expenses {
@@ -564,6 +580,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			byMonth[e.Month()] = m
 			byCategory[e.Month()] = map[string]money.Amount{}
 			byIncomeCategory[e.Month()] = map[string]money.Amount{}
+			byIncomeSubcategory[e.Month()] = map[string]map[string]money.Amount{}
 			bySubcategory[e.Month()] = map[string]map[string]money.Amount{}
 		}
 		if e.IsTransfer() {
@@ -574,6 +591,13 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		if e.IsIncome() {
 			m.Income += amount
 			byIncomeCategory[e.Month()][e.Category] += amount
+			subcategory := strings.TrimSpace(e.Subcategory)
+			if subcategory != "" {
+				if byIncomeSubcategory[e.Month()][e.Category] == nil {
+					byIncomeSubcategory[e.Month()][e.Category] = map[string]money.Amount{}
+				}
+				byIncomeSubcategory[e.Month()][e.Category][subcategory] += amount
+			}
 			if isSalaryCategory(e.Category) {
 				m.Salary += amount
 			}
@@ -612,6 +636,13 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 				share = float64(total) / float64(m.Income) * 100
 			}
 			m.IncomeCategories = append(m.IncomeCategories, CategoryTotal{Category: category, Total: total, Share: share})
+		}
+		for category, subcategories := range byIncomeSubcategory[m.Month] {
+			for subcategory, total := range subcategories {
+				m.IncomeSubcategories = append(m.IncomeSubcategories, SubcategoryTotal{
+					Category: category, Subcategory: subcategory, Total: total,
+				})
+			}
 		}
 		for category, subcategories := range bySubcategory[m.Month] {
 			for subcategory, total := range subcategories {

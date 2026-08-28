@@ -154,6 +154,16 @@
   </div>
 </section>
 
+<section class="widget graph-widget" data-widget="salary-by-subcategory" data-span="2">
+  {{template "widgethint" dict "Title" "Salary by secondary category" "Hint"
+    (printf "Monthly salary income in %s split by named secondary category. Salary without a secondary category is omitted." .Base)}}
+  <div class="widget-body">
+    {{if .SalaryBySubcategory.Empty}}
+      <p class="empty">Add secondary categories to salary transactions to compare them.</p>
+    {{else}}{{template "stackedchart" .SalaryBySubcategory}}{{end}}
+  </div>
+</section>
+
 <section class="widget graph-widget" data-widget="monthly-income" data-span="2">
   {{template "widgethint" dict "Title" "Income by month" "Hint"
     (printf "All monthly income recorded in %s, including salary and other income." .Base)}}
