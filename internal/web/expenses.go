@@ -15,19 +15,20 @@ import (
 )
 
 type expensePeriodData struct {
-	Base        string
-	Period      store.ExpenseMonth
-	Comparison  monthComparison
-	Entries     []store.Expense
-	EntryTitle  string
-	Category    string
-	Subcategory string
-	Categories  []string
-	Breakdown   []categoryBreakdown
-	Bars        BarChart
-	IsYear      bool
-	Notice      string
-	Error       string
+	Base            string
+	Period          store.ExpenseMonth
+	Comparison      monthComparison
+	Entries         []store.Expense
+	EntryTitle      string
+	Category        string
+	Subcategory     string
+	Categories      []string
+	Breakdown       []categoryBreakdown
+	IncomeBreakdown []store.CategoryTotal
+	Bars            BarChart
+	IsYear          bool
+	Notice          string
+	Error           string
 }
 
 type categoryBreakdown struct {
@@ -127,7 +128,8 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 		Base: store.Base, Period: period, Comparison: comparePeriods(previous, period),
 		Entries: entries, EntryTitle: entryTitle, Category: category, Subcategory: subcategory,
 		Categories: v.report.UsedCategories(), Breakdown: categoryBreakdowns(period),
-		Bars: bars, IsYear: yearly,
+		IncomeBreakdown: period.IncomeCategories,
+		Bars:            bars, IsYear: yearly,
 		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
 	})
 }

@@ -428,9 +428,6 @@ func (s *Store) CreateAccount(ctx context.Context, name, owner, bankRef, kind, c
 			return err
 		}
 	}
-	if err := reconcileInternalTransfers(ctx, tx); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
@@ -446,9 +443,6 @@ func (s *Store) SetAccountBankRef(ctx context.Context, id int64, bankRef string)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
-	}
-	if err := reconcileInternalTransfers(ctx, tx); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

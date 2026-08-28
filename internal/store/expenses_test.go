@@ -73,20 +73,13 @@ func TestBuildExpenseReportExcludesTransfers(t *testing.T) {
 	}
 }
 
-func TestImportPairsConfiguredAccountTransfersAcrossImports(t *testing.T) {
+func TestImportPairsSameDayOppositeAmountsAcrossImports(t *testing.T) {
 	store := openTestStore(t)
-	if _, err := store.db.Exec(`
-		INSERT INTO accounts (name, owner, bank_ref, kind, currency, asset_class) VALUES
-		('Checking', '', 'CH111', 'asset', 'CHF', 'cash'),
-		('Savings', '', 'CH222', 'asset', 'CHF', 'cash')`); err != nil {
-		t.Fatal(err)
-	}
-
-	outgoing := Expense{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "CH 111", Category: "Other", Note: "To savings", Currency: "CHF", Amount: 100000}
+	outgoing := Expense{Kind: KindExpense, AsOf: "2026-08-01", Category: "Other", Note: "To savings", Currency: "CHF", Amount: 100000}
 	if added, _, err := store.ImportExpenses(t.Context(), []Expense{outgoing}); err != nil || added != 1 {
 		t.Fatalf("first import = added %d, err %v", added, err)
 	}
-	incoming := Expense{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "CH222", Category: "Other", Note: "From checking", Currency: "CHF", Amount: 100000}
+	incoming := Expense{Kind: KindIncome, AsOf: "2026-08-01", Category: "Other", Note: "From checking", Currency: "EUR", Amount: 100000}
 	if added, _, err := store.ImportExpenses(t.Context(), []Expense{incoming}); err != nil || added != 1 {
 		t.Fatalf("second import = added %d, err %v", added, err)
 	}
@@ -100,43 +93,38 @@ func TestImportPairsConfiguredAccountTransfersAcrossImports(t *testing.T) {
 	}
 }
 
-func TestImportDoesNotPairUnknownAccountReferences(t *testing.T) {
+func TestImportDoesNotPairTransfersOnDifferentDaysOrAmounts(t *testing.T) {
 	store := openTestStore(t)
 	rows := []Expense{
-		{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "UNKNOWN1", Category: "Other", Currency: "CHF", Amount: 100000},
-		{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "UNKNOWN2", Category: "Other", Currency: "CHF", Amount: 100000},
+		{Kind: KindExpense, AsOf: "2026-08-01", Category: "Other", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-08-02", Category: "Other", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-08-01", Category: "Other", Currency: "CHF", Amount: 100001},
 	}
 	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := store.Expenses(t.Context())
-	if entries[0].Kind == KindTransfer || entries[1].Kind == KindTransfer {
-		t.Fatalf("unknown account references were paired: %+v", entries)
+	for _, entry := range entries {
+		if entry.Kind == KindTransfer {
+			t.Fatalf("non-matching entries were paired: %+v", entries)
+		}
 	}
 }
 
-func TestSettingAccountReferencesReconcilesEarlierImports(t *testing.T) {
+func TestImportReconcilesHistoricalSameDayAmountsWithoutReferences(t *testing.T) {
 	store := openTestStore(t)
-	rows := []Expense{
-		{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "CH111", Category: "Other", Currency: "CHF", Amount: 100000},
-		{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "CH222", Category: "Other", Currency: "CHF", Amount: 100000},
-	}
-	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO expenses (kind, as_of, category, note, currency, cents) VALUES
+		('expense', '2026-08-01', 'Other', '', 'CHF', 100000),
+		('income', '2026-08-01', 'Other', '', 'EUR', 100000)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`
-		INSERT INTO accounts (name, owner, kind, currency, asset_class) VALUES
-		('Checking', '', 'asset', 'CHF', 'cash'), ('Savings', '', 'asset', 'CHF', 'cash')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetAccountBankRef(t.Context(), 1, "CH 111"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetAccountBankRef(t.Context(), 2, "CH 222"); err != nil {
+	if _, _, err := store.ImportExpenses(t.Context(), []Expense{
+		{Kind: KindExpense, AsOf: "2026-08-02", Category: "Other", Currency: "CHF", Amount: 5000},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := store.Expenses(t.Context())
-	if entries[0].Kind != KindTransfer || entries[1].Kind != KindTransfer {
+	if entries[1].Kind != KindTransfer || entries[2].Kind != KindTransfer {
 		t.Fatalf("historical pair was not reconciled: %+v", entries)
 	}
 }
@@ -235,6 +223,28 @@ func TestIncomeGivesTheMonthsSaving(t *testing.T) {
 	}
 	if got, want := report.RecentSavedMonths(12), 1; got != want {
 		t.Errorf("RecentSavedMonths(12) = %d, want %d", got, want)
+	}
+}
+
+func TestIncomeCategoriesAreConvertedSortedAndAggregatedByYear(t *testing.T) {
+	report := BuildExpenseReport([]Expense{
+		{Kind: KindIncome, AsOf: "2026-07-01", Category: "Salary", Currency: "CHF", Amount: 500000},
+		{Kind: KindIncome, AsOf: "2026-07-02", Category: "Bonus", Currency: "USD", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-08-01", Category: "Salary", Currency: "CHF", Amount: 510000},
+	}, map[string]float64{"CHF": 1, "USD": 0.8})
+
+	july, _ := report.Find("2026-07")
+	if len(july.IncomeCategories) != 2 || july.IncomeCategories[0].Category != "Salary" ||
+		july.IncomeCategories[0].Total != 500000 || july.IncomeCategories[1].Total != 80000 {
+		t.Fatalf("July income categories = %+v", july.IncomeCategories)
+	}
+	if july.IncomeCategories[1].Share < 13.7 || july.IncomeCategories[1].Share > 13.9 {
+		t.Errorf("Bonus share = %.1f, want about 13.8", july.IncomeCategories[1].Share)
+	}
+	year := report.Year("2026")
+	if len(year.IncomeCategories) != 2 || year.IncomeCategories[0].Category != "Salary" ||
+		year.IncomeCategories[0].Total != 1010000 || year.IncomeCategories[1].Total != 80000 {
+		t.Fatalf("year income categories = %+v", year.IncomeCategories)
 	}
 }
 

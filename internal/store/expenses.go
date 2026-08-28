@@ -168,10 +168,6 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 	if err != nil {
 		return 0, 0, err
 	}
-	accountRefs, err := s.accountRefs(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
 	legacyKey := func(e Expense) string {
 		return fmt.Sprintf("%s|%s|%s|%s|%s|%d", e.AsOf, e.Category, e.Subcategory, e.Note, e.Currency, e.Amount)
 	}
@@ -195,7 +191,7 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 		existing[index].AccountRef = row.AccountRef
 		enriched[existing[index].ID] = row.AccountRef
 	}
-	matchedExisting := neutraliseInternalTransfers(existing, rows, accountRefs)
+	matchedExisting := neutraliseInternalTransfers(existing, rows)
 
 	key := func(e Expense) string {
 		return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", e.AsOf, e.Category, e.Subcategory, normalizeAccountRef(e.AccountRef), e.Note, e.Currency, e.Amount)
@@ -275,15 +271,16 @@ type SubcategoryTotal struct {
 
 // ExpenseMonth aggregates one calendar month of cash flow.
 type ExpenseMonth struct {
-	Month         string
-	Total         money.Amount // spending, net of refunds, in the base currency
-	Refunds       money.Amount // what came back, as a positive number
-	Income        money.Amount
-	Salary        money.Amount
-	Taxes         money.Amount
-	Categories    []CategoryTotal
-	Subcategories []SubcategoryTotal
-	Expenses      []Expense // every entry of the month, newest first
+	Month            string
+	Total            money.Amount // spending, net of refunds, in the base currency
+	Refunds          money.Amount // what came back, as a positive number
+	Income           money.Amount
+	Salary           money.Amount
+	Taxes            money.Amount
+	Categories       []CategoryTotal
+	IncomeCategories []CategoryTotal
+	Subcategories    []SubcategoryTotal
+	Expenses         []Expense // every entry of the month, newest first
 }
 
 // Saved is what was left of the month's income.
@@ -309,6 +306,7 @@ type ExpenseReport struct {
 func (r ExpenseReport) Year(year string) ExpenseMonth {
 	total := ExpenseMonth{Month: year}
 	byCategory := make(map[string]money.Amount)
+	byIncomeCategory := make(map[string]money.Amount)
 	bySubcategory := make(map[string]map[string]money.Amount)
 	for _, month := range r.Months {
 		if strings.HasPrefix(month.Month, year) {
@@ -319,6 +317,9 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 			total.Taxes += month.Taxes
 			for _, category := range month.Categories {
 				byCategory[category.Category] += category.Total
+			}
+			for _, category := range month.IncomeCategories {
+				byIncomeCategory[category.Category] += category.Total
 			}
 			for _, subcategory := range month.Subcategories {
 				if bySubcategory[subcategory.Category] == nil {
@@ -336,6 +337,13 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 		}
 		total.Categories = append(total.Categories, row)
 	}
+	for category, amount := range byIncomeCategory {
+		row := CategoryTotal{Category: category, Total: amount}
+		if total.Income != 0 {
+			row.Share = float64(amount) / float64(total.Income) * 100
+		}
+		total.IncomeCategories = append(total.IncomeCategories, row)
+	}
 	for category, subcategories := range bySubcategory {
 		for subcategory, amount := range subcategories {
 			total.Subcategories = append(total.Subcategories, SubcategoryTotal{
@@ -345,6 +353,9 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 	}
 	sort.Slice(total.Categories, func(i, j int) bool {
 		return total.Categories[i].Total > total.Categories[j].Total
+	})
+	sort.Slice(total.IncomeCategories, func(i, j int) bool {
+		return total.IncomeCategories[i].Total > total.IncomeCategories[j].Total
 	})
 	return total
 }
@@ -542,6 +553,7 @@ func (r ExpenseReport) UsedCategories() []string {
 func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseReport {
 	byMonth := map[string]*ExpenseMonth{}
 	byCategory := map[string]map[string]money.Amount{}
+	byIncomeCategory := map[string]map[string]money.Amount{}
 	bySubcategory := map[string]map[string]map[string]money.Amount{}
 
 	for _, e := range expenses {
@@ -551,6 +563,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			m = &ExpenseMonth{Month: e.Month()}
 			byMonth[e.Month()] = m
 			byCategory[e.Month()] = map[string]money.Amount{}
+			byIncomeCategory[e.Month()] = map[string]money.Amount{}
 			bySubcategory[e.Month()] = map[string]map[string]money.Amount{}
 		}
 		if e.IsTransfer() {
@@ -560,6 +573,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 
 		if e.IsIncome() {
 			m.Income += amount
+			byIncomeCategory[e.Month()][e.Category] += amount
 			if isSalaryCategory(e.Category) {
 				m.Salary += amount
 			}
@@ -592,6 +606,13 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			}
 			m.Categories = append(m.Categories, CategoryTotal{Category: category, Total: total, Share: share})
 		}
+		for category, total := range byIncomeCategory[m.Month] {
+			share := 0.0
+			if m.Income > 0 {
+				share = float64(total) / float64(m.Income) * 100
+			}
+			m.IncomeCategories = append(m.IncomeCategories, CategoryTotal{Category: category, Total: total, Share: share})
+		}
 		for category, subcategories := range bySubcategory[m.Month] {
 			for subcategory, total := range subcategories {
 				m.Subcategories = append(m.Subcategories, SubcategoryTotal{
@@ -600,6 +621,7 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			}
 		}
 		sort.Slice(m.Categories, func(i, j int) bool { return m.Categories[i].Total > m.Categories[j].Total })
+		sort.Slice(m.IncomeCategories, func(i, j int) bool { return m.IncomeCategories[i].Total > m.IncomeCategories[j].Total })
 		sort.Slice(m.Expenses, func(i, j int) bool {
 			if m.Expenses[i].AsOf != m.Expenses[j].AsOf {
 				return m.Expenses[i].AsOf > m.Expenses[j].AsOf
@@ -646,81 +668,15 @@ func classifyEntry(kind, category string) string {
 	return KindExpense
 }
 
-func (s *Store) accountRefs(ctx context.Context) (map[string]bool, error) {
-	refs := map[string]bool{}
-	err := query(ctx, s.db, `SELECT bank_ref FROM accounts WHERE bank_ref <> ''`, func(scan scanner) error {
-		var ref string
-		if err := scan(&ref); err != nil {
-			return err
-		}
-		refs[normalizeAccountRef(ref)] = true
-		return nil
-	})
-	return refs, err
-}
-
-type transferReconciler interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func reconcileInternalTransfers(ctx context.Context, db transferReconciler) error {
-	refs := map[string]bool{}
-	rows, err := db.QueryContext(ctx, `SELECT bank_ref FROM accounts WHERE bank_ref <> ''`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var ref string
-		if err := rows.Scan(&ref); err != nil {
-			rows.Close()
-			return err
-		}
-		refs[normalizeAccountRef(ref)] = true
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-
-	var entries []Expense
-	rows, err = db.QueryContext(ctx, `
-		SELECT id, kind, as_of, category, subcategory, account_ref, note, currency, cents
-		FROM expenses WHERE kind IN (?, ?) AND account_ref <> '' ORDER BY as_of, id`, KindExpense, KindIncome)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var entry Expense
-		var cents int64
-		if err := rows.Scan(&entry.ID, &entry.Kind, &entry.AsOf, &entry.Category, &entry.Subcategory,
-			&entry.AccountRef, &entry.Note, &entry.Currency, &cents); err != nil {
-			rows.Close()
-			return err
-		}
-		entry.Amount = money.Amount(cents)
-		entries = append(entries, entry)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	matched := neutraliseInternalTransfers(nil, entries, refs)
-	for id := range matched {
-		if _, err := db.ExecContext(ctx, `UPDATE expenses SET kind = ? WHERE id = ?`, KindTransfer, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func neutraliseInternalTransfers(existing, incoming []Expense, accountRefs map[string]bool) map[int64]bool {
+func neutraliseInternalTransfers(existing, incoming []Expense) map[int64]bool {
 	matchedExisting := map[int64]bool{}
 	all := append(slices.Clone(existing), incoming...)
 	for i := range all {
-		if all[i].Kind == KindTransfer || !accountRefs[normalizeAccountRef(all[i].AccountRef)] {
+		if all[i].Kind == KindTransfer {
 			continue
 		}
 		for j := i + 1; j < len(all); j++ {
-			if !accountRefs[normalizeAccountRef(all[j].AccountRef)] || !oppositeInternalTransfer(all[i], all[j]) {
+			if !oppositeInternalTransfer(all[i], all[j]) {
 				continue
 			}
 			all[i].Kind = KindTransfer
@@ -739,15 +695,7 @@ func neutraliseInternalTransfers(existing, incoming []Expense, accountRefs map[s
 }
 
 func oppositeInternalTransfer(a, b Expense) bool {
-	if !((a.Kind == KindIncome && b.Kind == KindExpense) || (a.Kind == KindExpense && b.Kind == KindIncome)) ||
-		normalizeAccountRef(a.AccountRef) == normalizeAccountRef(b.AccountRef) || a.Currency != b.Currency || a.Amount != b.Amount {
-		return false
-	}
-	left, leftErr := time.Parse("2006-01-02", a.AsOf)
-	right, rightErr := time.Parse("2006-01-02", b.AsOf)
-	if leftErr != nil || rightErr != nil {
-		return false
-	}
-	days := left.Sub(right).Hours() / 24
-	return days >= -3 && days <= 3
+	return ((a.Kind == KindIncome && b.Kind == KindExpense) ||
+		(a.Kind == KindExpense && b.Kind == KindIncome)) &&
+		a.AsOf == b.AsOf && a.Amount == b.Amount
 }

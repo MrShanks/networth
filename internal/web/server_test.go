@@ -280,6 +280,56 @@ func TestExpenseSummarySeparatesTaxPayments(t *testing.T) {
 	}
 }
 
+func TestExpenseSummarySeparatesSalaryAndOtherIncome(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary"}, "as_of": {"2026-08-01"}},
+		{"kind": {"income"}, "amount": {"750"}, "currency": {"CHF"}, "new_category": {"Bonus"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	for _, path := range []string{"/expenses?month=2026-08", "/expenses/year?year=2026"} {
+		page := get(t, srv, path)
+		summaryStart := strings.Index(page, `data-widget="period-summary"`)
+		comparisonStart := strings.Index(page, `data-widget="period-comparison"`)
+		if summaryStart < 0 || comparisonStart < 0 {
+			t.Fatalf("%s is missing summary panels", path)
+		}
+		summary := page[summaryStart:comparisonStart]
+		for _, want := range []string{"Salary", "5,000.00", "Other income", "750.00"} {
+			if !strings.Contains(summary, want) {
+				t.Errorf("%s summary is missing %q", path, want)
+			}
+		}
+	}
+}
+
+func TestExpenseIncomeByCategoryWidget(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary"}, "as_of": {"2026-08-01"}},
+		{"kind": {"income"}, "amount": {"750"}, "currency": {"CHF"}, "new_category": {"Bonus"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+
+	for _, path := range []string{"/expenses?month=2026-08", "/expenses/year?year=2026"} {
+		page := get(t, srv, path)
+		start := strings.Index(page, `data-widget="period-income-categories"`)
+		end := strings.Index(page, `data-widget="period-categories"`)
+		if start < 0 || end <= start {
+			t.Fatalf("%s is missing the income-category widget", path)
+		}
+		widget := page[start:end]
+		for _, want := range []string{"Income by category", "Salary", "5,000.00", "87%", "Bonus", "750.00", "13%", `category=Salary#entries`} {
+			if !strings.Contains(widget, want) {
+				t.Errorf("%s income categories are missing %q", path, want)
+			}
+		}
+	}
+}
+
 func TestExpenseCategoryDrillDown(t *testing.T) {
 	srv := newTestServer(t)
 	for _, entry := range []url.Values{
