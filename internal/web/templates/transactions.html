@@ -1,0 +1,45 @@
+{{define "transactions.html"}}<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Transactions</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+{{template "navbar" "transactions"}}
+<h1 class="sr-only">Transactions</h1>
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
+<div class="board" id="board">
+<section class="widget" data-widget="add-transaction" data-span="2">
+  {{template "widgethead" "Add transaction"}}
+  <div class="widget-body"><form method="post" action="/expenses" class="stack modal-form">
+    <label>Kind<select name="kind"><option value="expense">Expense</option><option value="income">Income</option><option value="tax">Tax</option><option value="transfer">Transfer</option></select></label>
+    <label><span>Amount<span class="required-mark" aria-hidden="true">*</span></span><input type="text" name="amount" inputmode="decimal" placeholder="42.90" required></label>
+    <label>Currency<select name="currency">{{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+    <label><span>Category<span class="required-mark" aria-hidden="true">*</span></span><input type="text" name="new_category" list="categories" placeholder="Groceries" required maxlength="40"><datalist id="categories">{{range .Categories}}<option value="{{.}}"></option>{{end}}</datalist></label>
+    <label class="wide">Note<input type="text" name="note" maxlength="120"></label>
+    <label><span>Date<span class="required-mark" aria-hidden="true">*</span></span><input type="date" name="as_of" value="{{.Today}}" required></label>
+    <span class="modal-action"><button type="submit">Add transaction</button></span>
+  </form></div>
+</section>
+<section class="widget" data-widget="import-transactions" data-span="2">
+  {{template "widgethead" "Import transactions"}}
+  <div class="widget-body"><form method="post" action="/expenses/import" enctype="multipart/form-data" class="stack modal-form">
+    <label class="wide"><span>CSV export<span class="required-mark" aria-hidden="true">*</span></span><input type="file" name="file" accept=".csv,text/csv" required></label>
+    <p class="empty small wide">Account transfers, card payments, and investment funding are retained but excluded from income and spending.</p>
+    <span class="modal-action"><button type="submit">Import</button></span>
+  </form></div>
+</section>
+<section class="widget rules-widget" data-widget="rules" data-span="2">
+  <header class="widget-head"><h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title">Category rules</span></h2><div class="widget-tools"><button type="button" class="pill-btn widget-action" id="show-rule-form" aria-expanded="false" aria-controls="rule-form">Add rule</button>{{template "widgettools"}}</div></header>
+  <div class="widget-body">
+    <form method="post" action="/rules" class="stack rule-editor" id="rule-form" hidden>
+      <label>Match<select name="mode" id="rule-mode"><option value="any">Any term (OR)</option><option value="all">All terms (AND)</option><option value="regex">Regular expression</option></select></label>
+      <label class="wide"><span><span id="rule-pattern-label">Terms, one per line</span><span class="required-mark">*</span></span><textarea name="pattern" id="rule-pattern" rows="3" required maxlength="500"></textarea></label>
+      <label><span>Put it in<span class="required-mark">*</span></span><input type="text" name="new_category" list="categories" required maxlength="40"></label>
+      <label>Subcategory<input type="text" name="subcategory" maxlength="40"></label>
+      <span class="modal-action inline-actions"><button type="submit" id="rule-submit">Save rule</button><button type="button" class="pill-btn" id="cancel-rule-edit">Cancel</button></span>
+    </form>
+    {{if .Rules}}<div class="rules-table-wrap"><table class="tight rules-table"><tbody>{{range .Rules}}<tr><td><span class="pill cur">{{if eq .Mode "all"}}AND{{else if eq .Mode "regex"}}Regex{{else}}OR{{end}}</span></td><td class="empty rule-pattern">{{.Pattern}}</td><td>{{.Category}}{{with .Subcategory}} · {{.}}{{end}}</td><td class="num empty small">{{.Matches}} {{if eq .Matches 1}}entry{{else}}entries{{end}}</td><td><button type="button" class="icon edit-rule" aria-label="Edit rule" data-rule-id="{{.ID}}" data-rule-mode="{{.Mode}}" data-rule-pattern="{{.Pattern}}" data-rule-category="{{.Category}}" data-rule-subcategory="{{.Subcategory}}">&#9998;</button></td><td><form method="post" action="/rules/{{.ID}}/delete"><button class="icon danger" aria-label="Delete rule">&#128465;</button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No category rules yet.</p>{{end}}
+  </div>
+</section>
+</div>
+<script src="/static/board.js"></script>
+<script src="/static/rules.js"></script>
+</body></html>{{end}}
