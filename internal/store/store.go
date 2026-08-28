@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -64,6 +65,7 @@ type Account struct {
 	ID         int64
 	Name       string
 	Owner      string
+	BankRef    string
 	Kind       string
 	Currency   string
 	AssetClass string
@@ -162,6 +164,8 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"category_rules", "match_mode", "ALTER TABLE category_rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'any'"},
 	{"expenses", "subcategory", "ALTER TABLE expenses ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''"},
 	{"category_rules", "subcategory", "ALTER TABLE category_rules ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''"},
+	{"expenses", "account_ref", "ALTER TABLE expenses ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''"},
+	{"accounts", "bank_ref", "ALTER TABLE accounts ADD COLUMN bank_ref TEXT NOT NULL DEFAULT ''"},
 }
 
 func Open(dsn string) (*Store, error) {
@@ -205,6 +209,9 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(c.ddl); err != nil {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS accounts_bank_ref ON accounts(bank_ref) WHERE bank_ref <> ''`); err != nil {
+		return fmt.Errorf("index account bank references: %w", err)
 	}
 	if _, err := db.Exec(`
 		UPDATE expenses SET kind = 'tax'
@@ -385,7 +392,7 @@ func (s *Store) SetDashboardChangeReset(ctx context.Context, date string) error 
 	return err
 }
 
-func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, class, asOf string, openingBalance *money.Amount) error {
+func (s *Store) CreateAccount(ctx context.Context, name, owner, bankRef, kind, currency, class, asOf string, openingBalance *money.Amount) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)
 	}
@@ -406,7 +413,8 @@ func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, 
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx,
-		`INSERT INTO accounts (name, owner, kind, currency, asset_class) VALUES (?, ?, ?, ?, ?)`, name, owner, kind, currency, class)
+		`INSERT INTO accounts (name, owner, bank_ref, kind, currency, asset_class) VALUES (?, ?, ?, ?, ?, ?)`,
+		name, owner, normalizeAccountRef(bankRef), kind, currency, class)
 	if err != nil {
 		return err
 	}
@@ -420,7 +428,33 @@ func (s *Store) CreateAccount(ctx context.Context, name, owner, kind, currency, 
 			return err
 		}
 	}
+	if err := reconcileInternalTransfers(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (s *Store) SetAccountBankRef(ctx context.Context, id int64, bankRef string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE accounts SET bank_ref = ? WHERE id = ?`, normalizeAccountRef(bankRef), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	if err := reconcileInternalTransfers(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func normalizeAccountRef(value string) string {
+	return strings.ToUpper(strings.Join(strings.Fields(value), ""))
 }
 
 func (s *Store) DeleteAccount(ctx context.Context, id int64) error {

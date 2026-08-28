@@ -1,3 +1,37 @@
+{{define "graphline"}}
+<div class="chart-wrap">
+  <svg class="chart" viewBox="0 0 {{.Chart.Width}} {{.Chart.Height}}" role="img" aria-label="{{.Label}}">
+    {{range .Chart.YTicks}}
+      <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Chart.Width}}" y2="{{.Y}}"/>
+      <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+    {{end}}
+    <polyline class="line {{.Class}}" points="{{.Chart.Line}}"/>
+    {{range .Chart.Extra}}<polyline class="line {{.Class}}" points="{{.Points}}"/>{{end}}
+    {{range .Chart.Dots}}
+      <circle class="dot graph-point {{$.Class}}-dot" cx="{{.X}}" cy="{{.Y}}" r="5" tabindex="0" aria-label="{{.Text}}" data-tooltip="{{.Text}}"><title>{{.Text}}</title></circle>
+    {{end}}
+    {{range .Chart.XTicks}}
+      <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
+    {{end}}
+  </svg>
+  <div class="graph-tooltip" role="tooltip" hidden></div>
+</div>
+{{end}}
+
+{{define "stackedchart"}}
+<svg class="chart" viewBox="0 0 {{.Width}} {{.Height}}" role="img">
+  {{range .YTicks}}
+    <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Width}}" y2="{{.Y}}"/>
+    <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+  {{end}}
+  {{range .Bands}}<polygon class="stack-band {{.Class}}" points="{{.Points}}"><title>{{.Label}}</title></polygon>{{end}}
+  {{range .XTicks}}<text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>{{end}}
+</svg>
+<div class="chart-legend">
+  {{range .Bands}}<span><i class="swatch {{.Class}}"></i>{{.Label}}</span>{{end}}
+</div>
+{{end}}
+
 {{define "graphs.html"}}<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,6 +48,85 @@
 
 <div class="board" id="board">
 
+<section class="widget graph-widget" data-widget="net-worth-history" data-span="2">
+  {{template "widgethint" dict "Title" "Net worth over time" "Hint"
+    (printf "Total assets minus liabilities in %s at every recorded valuation date." .Base)}}
+  <div class="widget-body">
+    {{if .NetWorth.Empty}}<p class="empty">Record account balances to see net worth history.</p>
+    {{else}}{{template "graphline" dict "Chart" .NetWorth "Label" "Net worth over time" "Class" "net-worth"}}{{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="investment-growth" data-span="2">
+  {{template "widgethint" dict "Title" "Investment growth" "Hint"
+    "Market value compared with money invested. The gap between the solid and dashed lines is investment growth."}}
+  <div class="widget-body">
+    {{if .Investments.Empty}}<p class="empty">Record fund trades and prices to see investment growth.</p>
+    {{else}}
+      <div class="chart-keys"><span><i class="key market"></i>Market value</span><span><i class="key invested"></i>Invested</span></div>
+      {{template "graphline" dict "Chart" .Investments "Label" "Investment market value and invested capital" "Class" "market"}}
+    {{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="income-spending" data-span="2">
+  {{template "widgethint" dict "Title" "Income vs spending" "Hint"
+    (printf "Monthly income compared with ordinary spending plus taxes in %s." .Base)}}
+  <div class="widget-body">
+    {{if .CashFlow.Empty}}<p class="empty">Record income and spending to compare cash flow.</p>
+    {{else}}
+      <div class="chart-keys"><span><i class="swatch income-bar"></i>Income</span><span><i class="swatch spending-bar"></i>Spending + tax</span></div>
+      <div class="chart-wrap">
+        <svg class="chart" viewBox="0 0 {{.CashFlow.Width}} {{.CashFlow.Height}}" role="img" aria-label="Monthly income versus spending">
+          {{range .CashFlow.YTicks}}
+            <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.CashFlow.Width}}" y2="{{.Y}}"/>
+            <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+          {{end}}
+          {{range .CashFlow.Bars}}
+            <rect class="cash-bar income-bar graph-point" x="{{.X}}" y="{{.IncomeY}}" width="{{.W}}" height="{{.IncomeH}}" transform="translate(-{{.W}},0)" tabindex="0" aria-label="{{.IncomeTitle}}" data-tooltip="{{.IncomeTitle}}"><title>{{.IncomeTitle}}</title></rect>
+            <rect class="cash-bar spending-bar graph-point" x="{{.X}}" y="{{.SpendingY}}" width="{{.W}}" height="{{.SpendingH}}" tabindex="0" aria-label="{{.SpendingTitle}}" data-tooltip="{{.SpendingTitle}}"><title>{{.SpendingTitle}}</title></rect>
+          {{end}}
+          {{range .CashFlow.XTicks}}<text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>{{end}}
+        </svg>
+        <div class="graph-tooltip" role="tooltip" hidden></div>
+      </div>
+    {{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="savings-rate" data-span="2">
+  {{template "widgethint" dict "Title" "Savings rate" "Hint" "The percentage of monthly income left after ordinary spending and taxes."}}
+  <div class="widget-body">
+    {{if .SavingsRate.Empty}}<p class="empty">Record income to see your savings rate.</p>
+    {{else}}{{template "graphline" dict "Chart" .SavingsRate "Label" "Monthly savings rate" "Class" "savings-rate"}}{{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="expense-composition" data-span="2">
+  {{template "widgethint" dict "Title" "Expense composition" "Hint" "Monthly ordinary spending split across the six largest categories overall, with the remainder grouped as Other."}}
+  <div class="widget-body">
+    {{if .ExpenseHistory.Empty}}<p class="empty">Record expenses to see category composition.</p>
+    {{else}}{{template "stackedchart" .ExpenseHistory}}{{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="allocation-history" data-span="2">
+  {{template "widgethint" dict "Title" "Asset allocation history" "Hint"
+    (printf "Recorded asset values in %s split into cash, stocks, bonds, and other assets." .Base)}}
+  <div class="widget-body">
+    {{if .AllocationHistory.Empty}}<p class="empty">Record balances and investments to see allocation history.</p>
+    {{else}}{{template "stackedchart" .AllocationHistory}}{{end}}
+  </div>
+</section>
+
+<section class="widget graph-widget" data-widget="effective-tax-rate" data-span="2">
+  {{template "widgethint" dict "Title" "Effective tax rate" "Hint" "Tax payments as a percentage of recorded gross income for each calendar year."}}
+  <div class="widget-body">
+    {{if .TaxRate.Empty}}<p class="empty">Record income and taxes to see your effective tax rate.</p>
+    {{else}}{{template "graphline" dict "Chart" .TaxRate "Label" "Effective tax rate by year" "Class" "tax-rate"}}{{end}}
+  </div>
+</section>
+
 <section class="widget graph-widget" data-widget="salary-growth" data-span="2">
   {{template "widgethint" dict "Title" "Salary growth by month" "Hint"
     (printf "Monthly income in Salary or Salary & pensions, recorded in %s." .Base)}}
@@ -21,6 +134,7 @@
     {{if .Salary.Empty}}
       <p class="empty">Record salary income to see salary growth.</p>
     {{else}}
+      <div class="chart-wrap">
       <svg class="chart" viewBox="0 0 {{.Salary.Width}} {{.Salary.Height}}" role="img" aria-label="Salary growth by month">
         {{range .Salary.YTicks}}
           <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Salary.Width}}" y2="{{.Y}}"/>
@@ -28,12 +142,14 @@
         {{end}}
         <polyline class="line salary-line" points="{{.Salary.Line}}"/>
         {{range .Salary.Dots}}
-          <circle class="dot salary-dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+          <circle class="dot salary-dot graph-point" cx="{{.X}}" cy="{{.Y}}" r="5" tabindex="0" aria-label="{{.Text}}" data-tooltip="{{.Text}}"><title>{{.Text}}</title></circle>
         {{end}}
         {{range .Salary.XTicks}}
           <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
         {{end}}
       </svg>
+      <div class="graph-tooltip" role="tooltip" hidden></div>
+      </div>
     {{end}}
   </div>
 </section>
@@ -45,6 +161,7 @@
     {{if .Income.Empty}}
       <p class="empty">Record income to see monthly totals.</p>
     {{else}}
+      <div class="chart-wrap">
       <svg class="chart" viewBox="0 0 {{.Income.Width}} {{.Income.Height}}" role="img" aria-label="Income by month">
         {{range .Income.YTicks}}
           <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Income.Width}}" y2="{{.Y}}"/>
@@ -52,12 +169,14 @@
         {{end}}
         <polyline class="line income-line" points="{{.Income.Line}}"/>
         {{range .Income.Dots}}
-          <circle class="dot income-dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+          <circle class="dot income-dot graph-point" cx="{{.X}}" cy="{{.Y}}" r="5" tabindex="0" aria-label="{{.Text}}" data-tooltip="{{.Text}}"><title>{{.Text}}</title></circle>
         {{end}}
         {{range .Income.XTicks}}
           <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
         {{end}}
       </svg>
+      <div class="graph-tooltip" role="tooltip" hidden></div>
+      </div>
     {{end}}
   </div>
 </section>
@@ -88,5 +207,6 @@
 </div>
 
 <script src="/static/board.js"></script>
+<script src="/static/graphs.js"></script>
 </body>
 </html>{{end}}

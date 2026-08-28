@@ -82,10 +82,11 @@
   function sizeRows() {
     const styles = getComputedStyle(board);
     const row = parseFloat(styles.gridAutoRows);
-    const gap = parseFloat(styles.columnGap);
+    const gap = parseFloat(styles.getPropertyValue('--widget-row-gap')) || 0;
     if (!row) return;
     widgets().forEach((widget) => {
-      widget.style.gridRowEnd = `span ${Math.ceil((widget.getBoundingClientRect().height + gap) / row)}`;
+      const height = widget.getBoundingClientRect().height;
+      widget.style.gridRowEnd = `span ${Math.ceil((height + gap) / row)}`;
     });
   }
 
@@ -162,6 +163,10 @@
     title.textContent = title.textContent.trim() || title.dataset.defaultTitle;
     save();
     layout();
+  }, true);
+
+  board.addEventListener('toggle', (e) => {
+    if (e.target.matches('details')) layout();
   }, true);
 
   // Dragging: the grip carries the drag, the widget is what moves.

@@ -15,12 +15,14 @@ import (
 // Row is one line ready to be stored. Income is positive; on an expense a
 // negative amount is a refund.
 type Row struct {
-	Income   bool
-	Date     string
-	Note     string
-	Category string
-	Currency string
-	Amount   money.Amount
+	Income     bool
+	Transfer   bool
+	Date       string
+	AccountRef string
+	Note       string
+	Category   string
+	Currency   string
+	Amount     money.Amount
 }
 
 // Skip explains why a line was left out.
@@ -45,8 +47,7 @@ var transfers = map[string]bool{
 
 // Options tunes what is kept.
 type Options struct {
-	KeepTransfers bool
-	Currencies    []string // currencies the app can store
+	Currencies []string // currencies the app can store
 }
 
 var errNoHeader = errors.New("the file has no header row")
@@ -96,16 +97,18 @@ func Parse(r io.Reader, opts Options) (Result, error) {
 
 // columns holds where each field we need sits in a record.
 type columns struct {
-	date, description, kind, amount, currency, category int
+	date, accountRef, description, kind, amount, currency, category int
 }
 
 func header(record []string) (columns, error) {
-	c := columns{date: -1, description: -1, kind: -1, amount: -1, currency: -1, category: -1}
+	c := columns{date: -1, accountRef: -1, description: -1, kind: -1, amount: -1, currency: -1, category: -1}
 
 	for i, name := range record {
 		switch normalise(name) {
 		case "transaction date", "date", "booking date":
 			c.date = i
+		case "account or card number", "account number", "card number":
+			c.accountRef = i
 		case "description", "text", "booking text":
 			c.description = i
 		case "income or expense", "type":
@@ -117,7 +120,7 @@ func header(record []string) (columns, error) {
 		case "category":
 			c.category = i
 		}
-		// "Account or card number" and anything else is ignored.
+		// Anything else is ignored.
 	}
 
 	if c.date < 0 || c.amount < 0 {
@@ -166,10 +169,7 @@ func parseRow(record []string, c columns, opts Options) (Row, *Skip) {
 	if category == "" {
 		category = "Uncategorised"
 	}
-	if !opts.KeepTransfers && transfers[normalise(category)] {
-		return Row{}, &Skip{Reason: "transfer, not spending", Detail: description}
-	}
-
+	transfer := transfers[normalise(category)]
 	currency := strings.ToUpper(field(c.currency))
 	if currency == "" && len(opts.Currencies) > 0 {
 		currency = opts.Currencies[0]
@@ -186,12 +186,14 @@ func parseRow(record []string, c columns, opts Options) (Row, *Skip) {
 	}
 
 	return Row{
-		Income:   income,
-		Date:     date,
-		Note:     description,
-		Category: category,
-		Currency: currency,
-		Amount:   stored,
+		Income:     income,
+		Transfer:   transfer,
+		Date:       date,
+		AccountRef: field(c.accountRef),
+		Note:       description,
+		Category:   category,
+		Currency:   currency,
+		Amount:     stored,
 	}, nil
 }
 

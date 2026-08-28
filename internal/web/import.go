@@ -21,23 +21,22 @@ type importData struct {
 
 func (s *Server) handleImportExpenses(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
-		s.redirectTo(w, r, "/expenses", "could not read the upload: "+err.Error())
+		s.redirectTo(w, r, "/transactions", "could not read the upload: "+err.Error())
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", "choose a CSV file to import")
+		s.redirectTo(w, r, "/transactions", "choose a CSV file to import")
 		return
 	}
 	defer file.Close()
 
 	result, err := importer.Parse(file, importer.Options{
-		KeepTransfers: r.FormValue("transfers") == "on",
-		Currencies:    store.Currencies,
+		Currencies: store.Currencies,
 	})
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", header.Filename+": "+err.Error())
+		s.redirectTo(w, r, "/transactions", header.Filename+": "+err.Error())
 		return
 	}
 
@@ -47,13 +46,12 @@ func (s *Server) handleImportExpenses(w http.ResponseWriter, r *http.Request) {
 		if row.Income {
 			kind = store.KindIncome
 		}
+		if row.Transfer {
+			kind = store.KindTransfer
+		}
 		expenses = append(expenses, store.Expense{
-			Kind:     kind,
-			AsOf:     row.Date,
-			Category: row.Category,
-			Note:     row.Note,
-			Currency: row.Currency,
-			Amount:   row.Amount,
+			Kind: kind, AsOf: row.Date, AccountRef: row.AccountRef,
+			Category: row.Category, Note: row.Note, Currency: row.Currency, Amount: row.Amount,
 		})
 	}
 

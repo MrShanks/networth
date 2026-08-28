@@ -163,7 +163,7 @@ func (s *Store) Recategorise(ctx context.Context, rule Rule) (int, error) {
 
 	moved := 0
 	for _, e := range expenses {
-		if !rule.Matches(e.Note) || (e.Category == rule.Category && e.Subcategory == rule.Subcategory) {
+		if e.Kind == KindTransfer || !rule.Matches(e.Note) || (e.Category == rule.Category && e.Subcategory == rule.Subcategory) {
 			continue
 		}
 		kind := classifyEntry(e.Kind, rule.Category)
@@ -183,6 +183,9 @@ func (s *Store) Recategorise(ctx context.Context, rule Rule) (int, error) {
 // Categorise applies the rules to freshly parsed rows, first match winning.
 func Categorise(rows []Expense, rules []Rule) []Expense {
 	for i, row := range rows {
+		if row.Kind == KindTransfer {
+			continue
+		}
 		for _, rule := range rules {
 			if rule.Matches(row.Note) {
 				rows[i].Category = rule.Category

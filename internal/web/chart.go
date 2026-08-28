@@ -75,6 +75,14 @@ type series struct {
 
 // plot lays out a main series and any extra lines on the same scale.
 func plot(points []datedValue, extra ...series) Chart {
+	return plotWithOptions(points, false, false, extra...)
+}
+
+func plotFromZero(points []datedValue) Chart {
+	return plotWithOptions(points, true, true)
+}
+
+func plotWithOptions(points []datedValue, fromZero, allDots bool, extra ...series) Chart {
 	c := Chart{Width: chartWidth, Height: chartHeight}
 	if len(points) == 0 {
 		c.Empty = true
@@ -92,8 +100,14 @@ func plot(points []datedValue, extra ...series) Chart {
 			hi = max(hi, v)
 		}
 	}
+	if fromZero {
+		lo = min(lo, 0)
+	}
 	if hi == lo {
-		hi, lo = hi+1, lo-1
+		hi++
+		if !fromZero {
+			lo--
+		}
 	}
 
 	plotW := float64(chartWidth - 2*chartPadX)
@@ -111,7 +125,7 @@ func plot(points []datedValue, extra ...series) Chart {
 
 	var line strings.Builder
 	// Dots carry the tooltips, but on a dense series they swallow the line.
-	withDots := len(points) <= 40
+	withDots := allDots || len(points) <= 40
 	for i, p := range points {
 		x, y := xAt(i), yAt(p.value)
 		fmt.Fprintf(&line, "%.1f,%.1f ", x, y)

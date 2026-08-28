@@ -16,6 +16,16 @@ func testExpenses() []Expense {
 	}
 }
 
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
 func TestBuildExpenseReport(t *testing.T) {
 	rates := map[string]float64{"CHF": 1, "USD": 0.8}
 	report := BuildExpenseReport(testExpenses(), rates)
@@ -49,6 +59,101 @@ func TestBuildExpenseReport(t *testing.T) {
 	}
 	if got, want := report.Average, money.Amount(114000); got != want {
 		t.Errorf("average = %s, want %s", got, want)
+	}
+}
+
+func TestBuildExpenseReportExcludesTransfers(t *testing.T) {
+	report := BuildExpenseReport([]Expense{
+		{ID: 1, Kind: KindExpense, AsOf: "2026-08-01", Category: "Groceries", Currency: "CHF", Amount: 5000},
+		{ID: 2, Kind: KindTransfer, AsOf: "2026-08-02", Category: "Account transfers", Currency: "CHF", Amount: 100000},
+	}, map[string]float64{"CHF": 1})
+	month, _ := report.Find("2026-08")
+	if month.Total != 5000 || len(month.Expenses) != 1 || month.Expenses[0].Kind == KindTransfer {
+		t.Fatalf("month includes neutral transfer: %+v", month)
+	}
+}
+
+func TestImportPairsConfiguredAccountTransfersAcrossImports(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+		INSERT INTO accounts (name, owner, bank_ref, kind, currency, asset_class) VALUES
+		('Checking', '', 'CH111', 'asset', 'CHF', 'cash'),
+		('Savings', '', 'CH222', 'asset', 'CHF', 'cash')`); err != nil {
+		t.Fatal(err)
+	}
+
+	outgoing := Expense{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "CH 111", Category: "Other", Note: "To savings", Currency: "CHF", Amount: 100000}
+	if added, _, err := store.ImportExpenses(t.Context(), []Expense{outgoing}); err != nil || added != 1 {
+		t.Fatalf("first import = added %d, err %v", added, err)
+	}
+	incoming := Expense{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "CH222", Category: "Other", Note: "From checking", Currency: "CHF", Amount: 100000}
+	if added, _, err := store.ImportExpenses(t.Context(), []Expense{incoming}); err != nil || added != 1 {
+		t.Fatalf("second import = added %d, err %v", added, err)
+	}
+
+	entries, err := store.Expenses(t.Context())
+	if err != nil || len(entries) != 2 || entries[0].Kind != KindTransfer || entries[1].Kind != KindTransfer {
+		t.Fatalf("paired entries = %+v, err %v", entries, err)
+	}
+	if added, duplicates, err := store.ImportExpenses(t.Context(), []Expense{incoming}); err != nil || added != 0 || duplicates != 1 {
+		t.Fatalf("reimport after pairing = added %d, duplicates %d, err %v", added, duplicates, err)
+	}
+}
+
+func TestImportDoesNotPairUnknownAccountReferences(t *testing.T) {
+	store := openTestStore(t)
+	rows := []Expense{
+		{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "UNKNOWN1", Category: "Other", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "UNKNOWN2", Category: "Other", Currency: "CHF", Amount: 100000},
+	}
+	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := store.Expenses(t.Context())
+	if entries[0].Kind == KindTransfer || entries[1].Kind == KindTransfer {
+		t.Fatalf("unknown account references were paired: %+v", entries)
+	}
+}
+
+func TestSettingAccountReferencesReconcilesEarlierImports(t *testing.T) {
+	store := openTestStore(t)
+	rows := []Expense{
+		{Kind: KindExpense, AsOf: "2026-08-01", AccountRef: "CH111", Category: "Other", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2026-08-02", AccountRef: "CH222", Category: "Other", Currency: "CHF", Amount: 100000},
+	}
+	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO accounts (name, owner, kind, currency, asset_class) VALUES
+		('Checking', '', 'asset', 'CHF', 'cash'), ('Savings', '', 'asset', 'CHF', 'cash')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAccountBankRef(t.Context(), 1, "CH 111"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAccountBankRef(t.Context(), 2, "CH 222"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := store.Expenses(t.Context())
+	if entries[0].Kind != KindTransfer || entries[1].Kind != KindTransfer {
+		t.Fatalf("historical pair was not reconciled: %+v", entries)
+	}
+}
+
+func TestReimportEnrichesLegacyTransactionAccountReference(t *testing.T) {
+	store := openTestStore(t)
+	legacy := Expense{Kind: KindExpense, AsOf: "2026-08-01", Category: "Other", Note: "Transfer", Currency: "CHF", Amount: 100000}
+	if _, _, err := store.ImportExpenses(t.Context(), []Expense{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	legacy.AccountRef = "CH111"
+	if added, duplicates, err := store.ImportExpenses(t.Context(), []Expense{legacy}); err != nil || added != 0 || duplicates != 1 {
+		t.Fatalf("reimport = added %d, duplicates %d, err %v", added, duplicates, err)
+	}
+	entries, _ := store.Expenses(t.Context())
+	if len(entries) != 1 || entries[0].AccountRef != "CH111" {
+		t.Fatalf("legacy entry was not enriched: %+v", entries)
 	}
 }
 
@@ -312,8 +417,8 @@ func TestBySubcategory(t *testing.T) {
 		t.Fatalf("BySubcategory with no category = %v, want nil", got)
 	}
 	got := report.BySubcategory("food", "2026-08")
-	if len(got) != 3 {
-		t.Fatalf("got %d subcategories, want 3: %+v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("got %d subcategories, want 2: %+v", len(got), got)
 	}
 	if got[0].Subcategory != "Supermarket" || got[0].Total != 10000 {
 		t.Errorf("first subcategory = %+v, want Supermarket CHF 100", got[0])
@@ -321,11 +426,8 @@ func TestBySubcategory(t *testing.T) {
 	if got[1].Subcategory != "Restaurants" || got[1].Total != 4000 {
 		t.Errorf("converted subcategory = %+v, want Restaurants CHF 40", got[1])
 	}
-	if got[2].Subcategory != "Uncategorized" || got[2].Total != 2500 {
-		t.Errorf("empty subcategory = %+v, want Uncategorized CHF 25", got[2])
-	}
-	if got[0].CurrentMonth != 0 || got[1].CurrentMonth != 0 || got[2].CurrentMonth != 2500 {
-		t.Errorf("current month amounts = %+v, want only Uncategorized CHF 25", got)
+	if got[0].CurrentMonth != 0 || got[1].CurrentMonth != 0 {
+		t.Errorf("current month amounts = %+v, want no tagged spending", got)
 	}
 }
 

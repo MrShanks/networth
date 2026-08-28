@@ -46,6 +46,7 @@ func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, err
 		"spark":      sparkPoints,
 		"trend":      sparkAmounts,
 		"monthName":  monthName,
+		"periodName": periodName,
 		"absAmount":  absAmount,
 		"subAmount":  subAmount,
 		"dict":       dict,
@@ -83,13 +84,18 @@ func sameSite(r *http.Request) bool {
 }
 
 func (s *Server) routes() {
-	s.mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
+	static := http.FileServer(http.FS(assets))
+	s.mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		static.ServeHTTP(w, r)
+	}))
 	s.mux.HandleFunc("GET /{$}", s.handleDashboard)
 	s.mux.HandleFunc("POST /dashboard/change/reset", s.handleResetDashboardChange)
 	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/currency", s.handleSetAccountCurrency)
 	s.mux.HandleFunc("POST /accounts/{id}/owner", s.handleSetAccountOwner)
+	s.mux.HandleFunc("POST /accounts/{id}/bank-ref", s.handleSetAccountBankRef)
 	s.mux.HandleFunc("POST /accounts/{id}/class", s.handleSetAccountClass)
 	s.mux.HandleFunc("POST /funds", s.handleCreateFund)
 	s.mux.HandleFunc("POST /funds/{id}/delete", s.handleDeleteFund)
@@ -101,6 +107,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /prices/{id}/delete", s.handleDeletePrice)
 	s.mux.HandleFunc("GET /api/rates", s.handleRatesAPI)
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
+	s.mux.HandleFunc("GET /expenses/year", s.handleYearExpenses)
+	s.mux.HandleFunc("GET /transactions", s.handleTransactions)
 	s.mux.HandleFunc("GET /graphs", s.handleGraphs)
 	s.mux.HandleFunc("POST /expenses", s.handleAddExpense)
 	s.mux.HandleFunc("POST /expenses/{id}/category", s.handleSetExpenseCategory)
@@ -324,10 +332,23 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		openingBalance = &amount
 	}
-	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("kind"),
+	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("bank_ref"), r.FormValue("kind"),
 		r.FormValue("currency"), class, s.date(r), openingBalance)
 	if err != nil {
 		s.redirect(w, r, "could not add account: "+err.Error())
+		return
+	}
+	s.redirect(w, r, "")
+}
+
+func (s *Server) handleSetAccountBankRef(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirect(w, r, "invalid id")
+		return
+	}
+	if err := s.store.SetAccountBankRef(r.Context(), id, r.FormValue("bank_ref")); err != nil {
+		s.redirect(w, r, err.Error())
 		return
 	}
 	s.redirect(w, r, "")

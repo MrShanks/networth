@@ -14,28 +14,42 @@ import (
 	"github.com/MrShanks/networth/internal/store"
 )
 
-type expensesData struct {
-	Base              string
-	Currencies        []string
-	Report            store.ExpenseReport
-	Month             store.ExpenseMonth
-	Latest            store.ExpenseMonth
-	Year              store.ExpenseMonth
-	Comparison        monthComparison
-	YearComparison    monthComparison
-	Entries           []store.Expense
-	EntryTitle        string
-	Category          string
-	Known             bool
-	Categories        []string
-	ByCategory        []store.CategorySummary
-	SecondaryCategory string
-	BySubcategory     []store.SubcategorySummary
-	Rules             []ruleView
-	Bars              BarChart
-	Today             string
-	Notice            string
-	Error             string
+type expensePeriodData struct {
+	Base        string
+	Period      store.ExpenseMonth
+	Comparison  monthComparison
+	Entries     []store.Expense
+	EntryTitle  string
+	Category    string
+	Subcategory string
+	Categories  []string
+	Breakdown   []categoryBreakdown
+	Bars        BarChart
+	IsYear      bool
+	Notice      string
+	Error       string
+}
+
+type categoryBreakdown struct {
+	store.CategoryTotal
+	Subcategories []store.SubcategorySummary
+}
+
+type transactionsData struct {
+	Base       string
+	Currencies []string
+	Categories []string
+	Rules      []ruleView
+	Today      string
+	Notice     string
+	Error      string
+}
+
+func periodName(period string, yearly bool) string {
+	if yearly {
+		return period
+	}
+	return monthName(period)
 }
 
 type monthComparison struct {
@@ -57,39 +71,143 @@ type ruleView struct {
 }
 
 func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
+	s.handleExpensePeriod(w, r, false)
+}
+
+func (s *Server) handleYearExpenses(w http.ResponseWriter, r *http.Request) {
+	s.handleExpensePeriod(w, r, true)
+}
+
+func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yearly bool) {
 	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 
-	report := v.report
-	month, known := report.Find(r.URL.Query().Get("month"))
-	comparison := compareMonths(report, r.URL.Query().Get("compare_a"), r.URL.Query().Get("compare_b"), month.Month)
-	year := time.Now().Format("2006")
-	if len(month.Month) >= 4 {
-		year = month.Month[:4]
-	}
-	yearComparison := compareYears(report, r.URL.Query().Get("compare_year_a"), r.URL.Query().Get("compare_year_b"), year)
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	secondaryCategory := strings.TrimSpace(r.URL.Query().Get("secondary_category"))
-	entries := month.Expenses
-	entryTitle := monthName(month.Month) + " entries"
-	if category != "" {
-		entries = filterExpenses(month.Expenses, category)
-		entryTitle = monthName(month.Month) + " · " + category
-		if r.URL.Query().Get("scope") == "all" {
-			entries = filterReportExpenses(report, category)
-			entryTitle = "All entries · " + category
+	selected := strings.TrimSpace(r.URL.Query().Get("month"))
+	if yearly {
+		selected = strings.TrimSpace(r.URL.Query().Get("year"))
+		if selected == "" {
+			selected = latestYear(v.report)
 		}
 	}
+	period, _ := v.report.Find(selected)
+	previousKey := previousMonth(period.Month)
+	if yearly {
+		period = v.report.Year(selected)
+		previousKey = previousYear(selected)
+	}
+	previous, _ := v.report.Find(previousKey)
+	if yearly {
+		previous = v.report.Year(previousKey)
+	}
 
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	subcategory := strings.TrimSpace(r.URL.Query().Get("subcategory"))
+	entries := period.Expenses
+	entryTitle := monthName(period.Month) + " entries"
+	if yearly {
+		entryTitle = period.Month + " entries"
+	}
+	if category != "" {
+		entries = filterExpenses(entries, category, subcategory)
+		entryTitle += " · " + category
+		if subcategory != "" {
+			entryTitle += " · " + subcategory
+		}
+	}
+	bars := BarChart{Width: chartWidth, Height: chartHeight, Empty: true}
+	if yearly {
+		bars = buildBars(monthsInYear(v.report.Months, selected), "")
+	}
+
+	s.render(w, "expense-period.html", expensePeriodData{
+		Base: store.Base, Period: period, Comparison: comparePeriods(previous, period),
+		Entries: entries, EntryTitle: entryTitle, Category: category, Subcategory: subcategory,
+		Categories: v.report.UsedCategories(), Breakdown: categoryBreakdowns(period),
+		Bars: bars, IsYear: yearly,
+		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
+	})
+}
+
+func (s *Server) handleTransactions(w http.ResponseWriter, r *http.Request) {
+	v, err := s.load(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	rules, err := s.store.Rules(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	ruleViews := make([]ruleView, 0, len(rules))
+	s.render(w, "transactions.html", transactionsData{
+		Base: store.Base, Currencies: store.Currencies, Categories: v.report.UsedCategories(),
+		Rules: ruleViews(rules, v.report), Today: time.Now().Format("2006-01-02"),
+		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
+	})
+}
+
+func latestYear(report store.ExpenseReport) string {
+	if len(report.Months) == 0 {
+		return time.Now().Format("2006")
+	}
+	return report.Months[len(report.Months)-1].Month[:4]
+}
+
+func previousMonth(month string) string {
+	parsed, err := time.Parse("2006-01", month)
+	if err != nil {
+		return ""
+	}
+	return parsed.AddDate(0, -1, 0).Format("2006-01")
+}
+
+func previousYear(year string) string {
+	value, err := strconv.Atoi(year)
+	if err != nil {
+		return ""
+	}
+	return strconv.Itoa(value - 1)
+}
+
+func monthsInYear(months []store.ExpenseMonth, year string) []store.ExpenseMonth {
+	var filtered []store.ExpenseMonth
+	for _, month := range months {
+		if strings.HasPrefix(month.Month, year) {
+			filtered = append(filtered, month)
+		}
+	}
+	return filtered
+}
+
+func categoryBreakdowns(period store.ExpenseMonth) []categoryBreakdown {
+	breakdowns := make([]categoryBreakdown, 0, len(period.Categories))
+	for _, category := range period.Categories {
+		row := categoryBreakdown{CategoryTotal: category}
+		for _, subcategory := range period.Subcategories {
+			if strings.EqualFold(subcategory.Category, category.Category) {
+				summary := store.SubcategorySummary{
+					Subcategory: subcategory.Subcategory,
+					Total:       subcategory.Total,
+				}
+				if category.Total != 0 {
+					summary.Share = float64(subcategory.Total) / float64(category.Total) * 100
+				}
+				row.Subcategories = append(row.Subcategories, summary)
+			}
+		}
+		slices.SortFunc(row.Subcategories, func(a, b store.SubcategorySummary) int {
+			return cmp.Compare(b.Total, a.Total)
+		})
+		breakdowns = append(breakdowns, row)
+	}
+	return breakdowns
+}
+
+func ruleViews(rules []store.Rule, report store.ExpenseReport) []ruleView {
+	views := make([]ruleView, 0, len(rules))
 	for _, rule := range rules {
 		matches := 0
 		for _, month := range report.Months {
@@ -99,58 +217,9 @@ func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		ruleViews = append(ruleViews, ruleView{Rule: rule, Matches: matches})
+		views = append(views, ruleView{Rule: rule, Matches: matches})
 	}
-
-	s.render(w, "expenses.html", expensesData{
-		Base:              store.Base,
-		Currencies:        store.Currencies,
-		Report:            report,
-		Month:             month,
-		Latest:            month,
-		Year:              report.Year(year),
-		Comparison:        comparison,
-		YearComparison:    yearComparison,
-		Entries:           entries,
-		EntryTitle:        entryTitle,
-		Category:          category,
-		Known:             known,
-		Categories:        report.UsedCategories(),
-		ByCategory:        report.ByCategory(),
-		SecondaryCategory: secondaryCategory,
-		BySubcategory:     report.BySubcategory(secondaryCategory, month.Month),
-		Rules:             ruleViews,
-		Bars:              buildBars(report.Months, month.Month),
-		Today:             time.Now().Format("2006-01-02"),
-		Notice:            r.URL.Query().Get("msg"),
-		Error:             r.URL.Query().Get("err"),
-	})
-}
-
-func compareMonths(report store.ExpenseReport, left, right, selected string) monthComparison {
-	if right == "" {
-		right = selected
-	}
-	if left == "" {
-		if parsed, err := time.Parse("2006-01", right); err == nil {
-			left = parsed.AddDate(0, -1, 0).Format("2006-01")
-		}
-	}
-	leftMonth, _ := report.Find(left)
-	rightMonth, _ := report.Find(right)
-	return comparePeriods(leftMonth, rightMonth)
-}
-
-func compareYears(report store.ExpenseReport, left, right, selected string) monthComparison {
-	if right == "" {
-		right = selected
-	}
-	if left == "" {
-		if year, err := strconv.Atoi(right); err == nil {
-			left = strconv.Itoa(year - 1)
-		}
-	}
-	return comparePeriods(report.Year(left), report.Year(right))
+	return views
 }
 
 func comparePeriods(leftMonth, rightMonth store.ExpenseMonth) monthComparison {
@@ -177,20 +246,13 @@ func comparePeriods(leftMonth, rightMonth store.ExpenseMonth) monthComparison {
 	return comparison
 }
 
-func filterExpenses(expenses []store.Expense, category string) []store.Expense {
+func filterExpenses(expenses []store.Expense, category, subcategory string) []store.Expense {
 	var filtered []store.Expense
 	for _, expense := range expenses {
-		if strings.EqualFold(expense.Category, category) {
+		if strings.EqualFold(expense.Category, category) &&
+			(subcategory == "" || strings.EqualFold(expense.Subcategory, subcategory)) {
 			filtered = append(filtered, expense)
 		}
-	}
-	return filtered
-}
-
-func filterReportExpenses(report store.ExpenseReport, category string) []store.Expense {
-	var filtered []store.Expense
-	for i := len(report.Months) - 1; i >= 0; i-- {
-		filtered = append(filtered, filterExpenses(report.Months[i].Expenses, category)...)
 	}
 	return filtered
 }
@@ -198,7 +260,7 @@ func filterReportExpenses(report store.ExpenseReport, category string) []store.E
 func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
 	amount, err := money.Parse(r.FormValue("amount"))
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", "amount must look like 42.90")
+		s.redirectTo(w, r, "/transactions", "amount must look like 42.90")
 		return
 	}
 	category := r.FormValue("category")
@@ -207,17 +269,17 @@ func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := store.KindExpense
-	if requested := r.FormValue("kind"); requested == store.KindIncome || requested == store.KindTax {
+	if requested := r.FormValue("kind"); requested == store.KindIncome || requested == store.KindTax || requested == store.KindTransfer {
 		kind = requested
 	}
 
 	err = s.store.AddEntry(r.Context(), kind, s.date(r), category,
 		r.FormValue("note"), r.FormValue("currency"), amount)
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", err.Error())
+		s.redirectTo(w, r, "/transactions", err.Error())
 		return
 	}
-	s.redirectTo(w, r, "/expenses", "")
+	s.redirectTo(w, r, "/transactions", "")
 }
 
 func (s *Server) handleDeleteExpense(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +354,7 @@ func (s *Server) handleAddRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.AddRule(r.Context(), mode, pattern, category, subcategory); err != nil {
-		s.redirectTo(w, r, "/expenses", "could not add the rule: "+err.Error())
+		s.redirectTo(w, r, "/transactions", "could not add the rule: "+err.Error())
 		return
 	}
 
@@ -302,7 +364,7 @@ func (s *Server) handleAddRule(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.noticeTo(w, r, "/expenses",
+	s.noticeTo(w, r, "/transactions",
 		fmt.Sprintf("Rule saved, %d existing entr%s moved to %s.",
 			moved, plural(moved, "y", "ies"), strings.TrimSpace(category)))
 }
@@ -310,20 +372,20 @@ func (s *Server) handleAddRule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", "invalid id")
+		s.redirectTo(w, r, "/transactions", "invalid id")
 		return
 	}
 	if err := s.store.DeleteRule(r.Context(), id); err != nil {
-		s.redirectTo(w, r, "/expenses", err.Error())
+		s.redirectTo(w, r, "/transactions", err.Error())
 		return
 	}
-	s.redirectTo(w, r, "/expenses", "")
+	s.redirectTo(w, r, "/transactions", "")
 }
 
 func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		s.redirectTo(w, r, "/expenses", "invalid rule")
+		s.redirectTo(w, r, "/transactions", "invalid rule")
 		return
 	}
 	mode := strings.TrimSpace(r.FormValue("mode"))
@@ -331,7 +393,7 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	category := strings.TrimSpace(r.FormValue("new_category"))
 	subcategory := strings.TrimSpace(r.FormValue("subcategory"))
 	if err := s.store.UpdateRule(r.Context(), id, mode, pattern, category, subcategory); err != nil {
-		s.redirectTo(w, r, "/expenses", "could not update the rule: "+err.Error())
+		s.redirectTo(w, r, "/transactions", "could not update the rule: "+err.Error())
 		return
 	}
 	moved, err := s.store.Recategorise(r.Context(), store.Rule{
@@ -341,7 +403,7 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.noticeTo(w, r, "/expenses", fmt.Sprintf("Rule updated, %d existing entr%s moved to %s.",
+	s.noticeTo(w, r, "/transactions", fmt.Sprintf("Rule updated, %d existing entr%s moved to %s.",
 		moved, plural(moved, "y", "ies"), category))
 }
 

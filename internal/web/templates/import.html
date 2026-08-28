@@ -7,14 +7,14 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-{{template "navbar" "expenses"}}
+{{template "navbar" "transactions"}}
 <h1 class="sr-only">Import expenses</h1>
 
 <section class="cards">
   <div class="card">
     <span class="label">Imported</span>
     <strong class="value up">{{.Added}}</strong>
-    <span class="empty small">new expense(s)</span>
+    <span class="empty small">new transaction(s)</span>
   </div>
   <div class="card">
     <span class="label">Already there</span>
@@ -24,7 +24,7 @@
   <div class="card">
     <span class="label">Left out</span>
     <strong class="value">{{len .Skips}}</strong>
-    <span class="empty small">income, transfers and unreadable lines</span>
+    <span class="empty small">unreadable or unsupported lines</span>
   </div>
 </section>
 
@@ -46,7 +46,7 @@
   {{else}}
     <p class="empty">Every line was used.</p>
   {{end}}
-  <p><a href="/expenses">Back to expenses</a></p>
+  <p><a href="/transactions">Back to transactions</a></p>
 </section>
 </body>
 </html>{{end}}

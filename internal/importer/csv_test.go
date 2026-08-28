@@ -36,11 +36,13 @@ func TestParseKeepsSpendingRefundsAndIncome(t *testing.T) {
 	got := parse(t, Options{})
 
 	want := []Row{
-		{Date: "2026-07-31", Category: "Fees", Currency: "CHF", Amount: 1500},
-		{Date: "2026-07-30", Category: "Household", Currency: "CHF", Amount: -9710}, // a refund
-		{Date: "2026-07-28", Category: "Shopping", Currency: "CHF", Amount: 8820},
-		{Date: "2026-07-27", Category: "Salary & pensions", Currency: "CHF", Amount: 755310, Income: true},
-		{Date: "2026-07-22", Category: "Restaurants & bars", Currency: "EUR", Amount: 3268},
+		{Date: "2026-07-31", AccountRef: "CH66 0022 7227 1184 2740 Y", Category: "Fees", Currency: "CHF", Amount: 1500},
+		{Date: "2026-07-30", AccountRef: "****3388", Category: "Household", Currency: "CHF", Amount: -9710}, // a refund
+		{Date: "2026-07-28", AccountRef: "CH36 0022 7227 1184 2440 J", Category: "Shopping", Currency: "CHF", Amount: 8820},
+		{Date: "2026-07-27", AccountRef: "CH36 0022 7227 1184 2440 J", Category: "Savings & investments", Currency: "CHF", Amount: 300000, Transfer: true},
+		{Date: "2026-07-27", AccountRef: "CH36 0022 7227 1184 2440 J", Category: "Salary & pensions", Currency: "CHF", Amount: 755310, Income: true},
+		{Date: "2026-07-22", AccountRef: "****3388", Category: "Restaurants & bars", Currency: "EUR", Amount: 3268},
+		{Date: "2026-07-16", AccountRef: "CH36 0022 7227 1184 2440 J", Category: "Credit card invoice payments", Currency: "CHF", Amount: 71550, Transfer: true},
 	}
 	if len(got.Rows) != len(want) {
 		t.Fatalf("kept %d rows, want %d: %+v", len(got.Rows), len(want), got.Rows)
@@ -48,7 +50,7 @@ func TestParseKeepsSpendingRefundsAndIncome(t *testing.T) {
 	for i, w := range want {
 		row := got.Rows[i]
 		if row.Date != w.Date || row.Category != w.Category || row.Currency != w.Currency ||
-			row.Amount != w.Amount || row.Income != w.Income {
+			row.Amount != w.Amount || row.Income != w.Income || row.Transfer != w.Transfer || row.AccountRef != w.AccountRef {
 			t.Errorf("row %d = %+v, want %+v", i, row, w)
 		}
 	}
@@ -85,10 +87,8 @@ func TestParseExplainsEverySkip(t *testing.T) {
 	}
 
 	cases := map[string]string{
-		"STICHTING DEGIRO":   "transfer", // investing
-		"UBS SWITZERLAND AG": "transfer", // paying the card
-		"SOMETHING ABROAD":   "GBP is not supported",
-		"BROKEN LINE":        "cannot read the date",
+		"SOMETHING ABROAD": "GBP is not supported",
+		"BROKEN LINE":      "cannot read the date",
 	}
 	if len(got.Skips) != len(cases) {
 		t.Fatalf("skipped %d rows, want %d: %+v", len(got.Skips), len(cases), got.Skips)
@@ -102,17 +102,17 @@ func TestParseExplainsEverySkip(t *testing.T) {
 	}
 }
 
-func TestParseCanKeepTransfers(t *testing.T) {
-	got := parse(t, Options{KeepTransfers: true})
+func TestParseKeepsTransfersAsNeutralRows(t *testing.T) {
+	got := parse(t, Options{})
 
 	var found bool
 	for _, row := range got.Rows {
-		if row.Category == "Savings & investments" && row.Amount == money.Amount(300000) {
+		if row.Category == "Savings & investments" && row.Amount == money.Amount(300000) && row.Transfer {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("the DEGIRO transfer was dropped even though transfers were kept")
+		t.Error("the DEGIRO transfer was not retained as neutral")
 	}
 }
 

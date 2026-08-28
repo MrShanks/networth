@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -14,9 +15,10 @@ import (
 
 // Entry kinds: money going out, and money coming in.
 const (
-	KindExpense = "expense"
-	KindIncome  = "income"
-	KindTax     = "tax"
+	KindExpense  = "expense"
+	KindIncome   = "income"
+	KindTax      = "tax"
+	KindTransfer = "transfer"
 )
 
 // Expense is a single cash flow record, in its own currency. A negative amount
@@ -27,6 +29,7 @@ type Expense struct {
 	AsOf        string
 	Category    string
 	Subcategory string
+	AccountRef  string
 	Note        string
 	Currency    string
 	Amount      money.Amount
@@ -40,6 +43,8 @@ func (e Expense) IsIncome() bool { return e.Kind == KindIncome }
 
 // IsTax reports whether this entry is a tax payment kept outside spending.
 func (e Expense) IsTax() bool { return e.Kind == KindTax }
+
+func (e Expense) IsTransfer() bool { return e.Kind == KindTransfer }
 
 // Month is the YYYY-MM the entry belongs to.
 func (e Expense) Month() string { return e.AsOf[:7] }
@@ -59,7 +64,7 @@ CREATE INDEX IF NOT EXISTS expenses_as_of ON expenses(as_of);
 
 // AddEntry records money spent or earned.
 func (s *Store) AddEntry(ctx context.Context, kind, asOf, category, note, currency string, amount money.Amount) error {
-	if kind != KindExpense && kind != KindIncome && kind != KindTax {
+	if kind != KindExpense && kind != KindIncome && kind != KindTax && kind != KindTransfer {
 		return fmt.Errorf("unknown entry kind %q", kind)
 	}
 	if err := checkDate(asOf); err != nil {
@@ -106,7 +111,7 @@ func (s *Store) SetExpenseCategory(ctx context.Context, id int64, category strin
 		}
 		return err
 	}
-	if kind != KindIncome {
+	if kind != KindIncome && kind != KindTransfer {
 		kind = classifyEntry(KindExpense, category)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -153,9 +158,37 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 	if err != nil {
 		return 0, 0, err
 	}
+	accountRefs, err := s.accountRefs(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	legacyKey := func(e Expense) string {
+		return fmt.Sprintf("%s|%s|%s|%s|%s|%d", e.AsOf, e.Category, e.Subcategory, e.Note, e.Currency, e.Amount)
+	}
+	legacy := map[string][]int{}
+	for i, entry := range existing {
+		if entry.AccountRef == "" {
+			legacy[legacyKey(entry)] = append(legacy[legacyKey(entry)], i)
+		}
+	}
+	enriched := map[int64]string{}
+	for _, row := range rows {
+		if row.AccountRef == "" {
+			continue
+		}
+		key := legacyKey(row)
+		if len(legacy[key]) == 0 {
+			continue
+		}
+		index := legacy[key][0]
+		legacy[key] = legacy[key][1:]
+		existing[index].AccountRef = row.AccountRef
+		enriched[existing[index].ID] = row.AccountRef
+	}
+	matchedExisting := neutraliseInternalTransfers(existing, rows, accountRefs)
 
 	key := func(e Expense) string {
-		return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", e.Kind, e.AsOf, e.Category, e.Subcategory, e.Note, e.Currency, e.Amount)
+		return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", e.AsOf, e.Category, e.Subcategory, normalizeAccountRef(e.AccountRef), e.Note, e.Currency, e.Amount)
 	}
 	seen := map[string]int{}
 	for _, e := range existing {
@@ -167,6 +200,16 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 		return 0, 0, err
 	}
 	defer tx.Rollback()
+	for id, accountRef := range enriched {
+		if _, err := tx.ExecContext(ctx, `UPDATE expenses SET account_ref = ? WHERE id = ?`, strings.TrimSpace(accountRef), id); err != nil {
+			return 0, 0, err
+		}
+	}
+	for id := range matchedExisting {
+		if _, err := tx.ExecContext(ctx, `UPDATE expenses SET kind = ? WHERE id = ?`, KindTransfer, id); err != nil {
+			return 0, 0, err
+		}
+	}
 
 	for _, row := range rows {
 		row.Kind = classifyEntry(row.Kind, row.Category)
@@ -176,8 +219,8 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `
-            INSERT INTO expenses (kind, as_of, category, subcategory, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			row.Kind, row.AsOf, row.Category, strings.TrimSpace(row.Subcategory), row.Note, row.Currency, int64(row.Amount))
+			INSERT INTO expenses (kind, as_of, category, subcategory, account_ref, note, currency, cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.Kind, row.AsOf, row.Category, strings.TrimSpace(row.Subcategory), strings.TrimSpace(row.AccountRef), row.Note, row.Currency, int64(row.Amount))
 		if err != nil {
 			return 0, 0, err
 		}
@@ -190,14 +233,14 @@ func (s *Store) ImportExpenses(ctx context.Context, rows []Expense) (added, dupl
 func (s *Store) Expenses(ctx context.Context) ([]Expense, error) {
 	var out []Expense
 	err := query(ctx, s.db, `
-		SELECT id, kind, as_of, category, subcategory, note, currency, cents
+		SELECT id, kind, as_of, category, subcategory, account_ref, note, currency, cents
         FROM expenses ORDER BY as_of DESC, id DESC`,
 		func(scan scanner) error {
 			var (
 				e     Expense
 				cents int64
 			)
-			if err := scan(&e.ID, &e.Kind, &e.AsOf, &e.Category, &e.Subcategory, &e.Note, &e.Currency, &cents); err != nil {
+			if err := scan(&e.ID, &e.Kind, &e.AsOf, &e.Category, &e.Subcategory, &e.AccountRef, &e.Note, &e.Currency, &cents); err != nil {
 				return err
 			}
 			e.Amount = money.Amount(cents)
@@ -256,6 +299,7 @@ type ExpenseReport struct {
 func (r ExpenseReport) Year(year string) ExpenseMonth {
 	total := ExpenseMonth{Month: year}
 	byCategory := make(map[string]money.Amount)
+	bySubcategory := make(map[string]map[string]money.Amount)
 	for _, month := range r.Months {
 		if strings.HasPrefix(month.Month, year) {
 			total.Total += month.Total
@@ -266,6 +310,13 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 			for _, category := range month.Categories {
 				byCategory[category.Category] += category.Total
 			}
+			for _, subcategory := range month.Subcategories {
+				if bySubcategory[subcategory.Category] == nil {
+					bySubcategory[subcategory.Category] = make(map[string]money.Amount)
+				}
+				bySubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
+			}
+			total.Expenses = append(total.Expenses, month.Expenses...)
 		}
 	}
 	for category, amount := range byCategory {
@@ -274,6 +325,13 @@ func (r ExpenseReport) Year(year string) ExpenseMonth {
 			row.Share = float64(amount) / float64(total.Total) * 100
 		}
 		total.Categories = append(total.Categories, row)
+	}
+	for category, subcategories := range bySubcategory {
+		for subcategory, amount := range subcategories {
+			total.Subcategories = append(total.Subcategories, SubcategoryTotal{
+				Category: category, Subcategory: subcategory, Total: amount,
+			})
+		}
 	}
 	sort.Slice(total.Categories, func(i, j int) bool {
 		return total.Categories[i].Total > total.Categories[j].Total
@@ -485,6 +543,9 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 			byCategory[e.Month()] = map[string]money.Amount{}
 			bySubcategory[e.Month()] = map[string]map[string]money.Amount{}
 		}
+		if e.IsTransfer() {
+			continue
+		}
 		m.Expenses = append(m.Expenses, e)
 
 		if e.IsIncome() {
@@ -504,13 +565,12 @@ func BuildExpenseReport(expenses []Expense, rates map[string]float64) ExpenseRep
 		}
 		byCategory[e.Month()][e.Category] += amount
 		subcategory := strings.TrimSpace(e.Subcategory)
-		if subcategory == "" {
-			subcategory = "Uncategorized"
+		if subcategory != "" {
+			if bySubcategory[e.Month()][e.Category] == nil {
+				bySubcategory[e.Month()][e.Category] = map[string]money.Amount{}
+			}
+			bySubcategory[e.Month()][e.Category][subcategory] += amount
 		}
-		if bySubcategory[e.Month()][e.Category] == nil {
-			bySubcategory[e.Month()][e.Category] = map[string]money.Amount{}
-		}
-		bySubcategory[e.Month()][e.Category][subcategory] += amount
 	}
 
 	report := ExpenseReport{}
@@ -567,11 +627,117 @@ func isTaxCategory(category string) bool {
 }
 
 func classifyEntry(kind, category string) string {
-	if kind == KindIncome {
+	if kind == KindIncome || kind == KindTransfer {
 		return kind
 	}
 	if kind == KindTax || isTaxCategory(category) {
 		return KindTax
 	}
 	return KindExpense
+}
+
+func (s *Store) accountRefs(ctx context.Context) (map[string]bool, error) {
+	refs := map[string]bool{}
+	err := query(ctx, s.db, `SELECT bank_ref FROM accounts WHERE bank_ref <> ''`, func(scan scanner) error {
+		var ref string
+		if err := scan(&ref); err != nil {
+			return err
+		}
+		refs[normalizeAccountRef(ref)] = true
+		return nil
+	})
+	return refs, err
+}
+
+type transferReconciler interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func reconcileInternalTransfers(ctx context.Context, db transferReconciler) error {
+	refs := map[string]bool{}
+	rows, err := db.QueryContext(ctx, `SELECT bank_ref FROM accounts WHERE bank_ref <> ''`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			rows.Close()
+			return err
+		}
+		refs[normalizeAccountRef(ref)] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	var entries []Expense
+	rows, err = db.QueryContext(ctx, `
+		SELECT id, kind, as_of, category, subcategory, account_ref, note, currency, cents
+		FROM expenses WHERE kind IN (?, ?) AND account_ref <> '' ORDER BY as_of, id`, KindExpense, KindIncome)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var entry Expense
+		var cents int64
+		if err := rows.Scan(&entry.ID, &entry.Kind, &entry.AsOf, &entry.Category, &entry.Subcategory,
+			&entry.AccountRef, &entry.Note, &entry.Currency, &cents); err != nil {
+			rows.Close()
+			return err
+		}
+		entry.Amount = money.Amount(cents)
+		entries = append(entries, entry)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	matched := neutraliseInternalTransfers(nil, entries, refs)
+	for id := range matched {
+		if _, err := db.ExecContext(ctx, `UPDATE expenses SET kind = ? WHERE id = ?`, KindTransfer, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func neutraliseInternalTransfers(existing, incoming []Expense, accountRefs map[string]bool) map[int64]bool {
+	matchedExisting := map[int64]bool{}
+	all := append(slices.Clone(existing), incoming...)
+	for i := range all {
+		if all[i].Kind == KindTransfer || !accountRefs[normalizeAccountRef(all[i].AccountRef)] {
+			continue
+		}
+		for j := i + 1; j < len(all); j++ {
+			if !accountRefs[normalizeAccountRef(all[j].AccountRef)] || !oppositeInternalTransfer(all[i], all[j]) {
+				continue
+			}
+			all[i].Kind = KindTransfer
+			all[j].Kind = KindTransfer
+			if all[i].ID != 0 {
+				matchedExisting[all[i].ID] = true
+			}
+			if all[j].ID != 0 {
+				matchedExisting[all[j].ID] = true
+			}
+			break
+		}
+	}
+	copy(incoming, all[len(existing):])
+	return matchedExisting
+}
+
+func oppositeInternalTransfer(a, b Expense) bool {
+	if !((a.Kind == KindIncome && b.Kind == KindExpense) || (a.Kind == KindExpense && b.Kind == KindIncome)) ||
+		normalizeAccountRef(a.AccountRef) == normalizeAccountRef(b.AccountRef) || a.Currency != b.Currency || a.Amount != b.Amount {
+		return false
+	}
+	left, leftErr := time.Parse("2006-01-02", a.AsOf)
+	right, rightErr := time.Parse("2006-01-02", b.AsOf)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	days := left.Sub(right).Hours() / 24
+	return days >= -3 && days <= 3
 }
