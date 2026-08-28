@@ -113,6 +113,42 @@ func TestImportPairsBankLabelledTransferWithIncome(t *testing.T) {
 	}
 }
 
+func TestImportNeutralisesOnlyOneCounterpartPerTransfer(t *testing.T) {
+	store := openTestStore(t)
+	rows := []Expense{
+		{Kind: KindIncome, AsOf: "2026-07-15", AccountRef: "ACCOUNT-A", Category: "External income", Currency: "CHF", Amount: 1000000},
+		{Kind: KindIncome, AsOf: "2026-07-15", AccountRef: "ACCOUNT-B", Category: "Incoming transfer", Currency: "CHF", Amount: 1000000},
+		{Kind: KindTransfer, AsOf: "2026-07-15", AccountRef: "ACCOUNT-A", Category: "Account transfers", Currency: "CHF", Amount: 1000000},
+	}
+	if _, _, err := store.ImportExpenses(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.Expenses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transfers, incomes := 0, 0
+	for _, entry := range entries {
+		switch entry.Kind {
+		case KindTransfer:
+			transfers++
+		case KindIncome:
+			incomes++
+		}
+	}
+	if transfers != 2 || incomes != 1 {
+		t.Fatalf("kinds after pairing = %+v, want exactly two transfers and one income", entries)
+	}
+	report := BuildExpenseReport(entries, map[string]float64{"CHF": 1})
+	month, _ := report.Find("2026-07")
+	if month.Income != 1000000 {
+		t.Fatalf("reported income = %s, want 10,000.00", month.Income)
+	}
+	if len(month.IncomeCategories) != 1 || month.IncomeCategories[0].Category != "External income" {
+		t.Fatalf("remaining income = %+v, want external income", month.IncomeCategories)
+	}
+}
+
 func TestImportDoesNotPairTransfersOnDifferentDaysOrAmounts(t *testing.T) {
 	store := openTestStore(t)
 	rows := []Expense{

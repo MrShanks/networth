@@ -671,11 +671,36 @@ func classifyEntry(kind, category string) string {
 func neutraliseInternalTransfers(existing, incoming []Expense) map[int64]bool {
 	matchedExisting := map[int64]bool{}
 	all := append(slices.Clone(existing), incoming...)
+	paired := make([]bool, len(all))
+	order := make([]int, 0, len(all))
 	for i := range all {
-		for j := i + 1; j < len(all); j++ {
-			if !oppositeInternalTransfer(all[i], all[j]) {
+		if all[i].Kind == KindTransfer {
+			order = append(order, i)
+		}
+	}
+	for i := range all {
+		if all[i].Kind != KindTransfer {
+			order = append(order, i)
+		}
+	}
+	for _, i := range order {
+		if paired[i] {
+			continue
+		}
+		match := -1
+		for j := range all {
+			if j == i || paired[j] || !oppositeInternalTransfer(all[i], all[j]) {
 				continue
 			}
+			match = j
+			if differentKnownAccounts(all[i], all[j]) {
+				break
+			}
+		}
+		if match >= 0 {
+			j := match
+			paired[i] = true
+			paired[j] = true
 			all[i].Kind = KindTransfer
 			all[j].Kind = KindTransfer
 			if all[i].ID != 0 {
@@ -684,11 +709,16 @@ func neutraliseInternalTransfers(existing, incoming []Expense) map[int64]bool {
 			if all[j].ID != 0 {
 				matchedExisting[all[j].ID] = true
 			}
-			break
 		}
 	}
 	copy(incoming, all[len(existing):])
 	return matchedExisting
+}
+
+func differentKnownAccounts(a, b Expense) bool {
+	left := normalizeAccountRef(a.AccountRef)
+	right := normalizeAccountRef(b.AccountRef)
+	return left != "" && right != "" && left != right
 }
 
 func oppositeInternalTransfer(a, b Expense) bool {
