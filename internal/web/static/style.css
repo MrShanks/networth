@@ -11,7 +11,15 @@
 .account-delete { margin-left: auto; opacity: 0; transition: opacity 0.15s ease; }
 .row:hover .account-delete, .row:focus-within .account-delete { opacity: 1; }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  scrollbar-color: #4a5262 var(--panel);
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: var(--panel); }
+*::-webkit-scrollbar-thumb { border: 2px solid var(--panel); border-radius: 5px; background: #4a5262; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 .sr-only {
   position: absolute;
@@ -478,6 +486,7 @@ button.add-row { color: var(--accent); border-color: rgba(106, 166, 255, 0.35); 
 .entry-subcategory-form { margin-left: 0.25rem; }
 #entries .widget-body { overflow-x: auto; }
 .entry-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; color: var(--muted); font-size: 0.82rem; }
+.entries-table + .entry-pager { margin: 0.75rem 0 0; }
 .entry-pager .pill-btn { text-decoration: none; }
 input.entry-subcategory {
   width: 6.5rem;

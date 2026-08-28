@@ -398,7 +398,7 @@ func TestYearAndAllTimeEntriesArePaginated(t *testing.T) {
 		if rows := strings.Count(page, `data-entry-id=`); rows != 100 {
 			t.Errorf("%s rows = %d, want 100", path, rows)
 		}
-		if !strings.Contains(page, "Showing 1–100 of 101") || !strings.Contains(page, `>Next</a>`) {
+		if strings.Count(page, "Showing 1–100 of 101") != 2 || strings.Count(page, `>Next</a>`) != 2 {
 			t.Errorf("%s is missing first-page navigation", path)
 		}
 		separator := "?"
@@ -409,7 +409,7 @@ func TestYearAndAllTimeEntriesArePaginated(t *testing.T) {
 		if rows := strings.Count(second, `data-entry-id=`); rows != 1 {
 			t.Errorf("%s second-page rows = %d, want 1", path, rows)
 		}
-		if !strings.Contains(second, "Showing 101–101 of 101") || !strings.Contains(second, `>Previous</a>`) {
+		if strings.Count(second, "Showing 101–101 of 101") != 2 || strings.Count(second, `>Previous</a>`) != 2 {
 			t.Errorf("%s is missing second-page navigation", path)
 		}
 	}
@@ -437,6 +437,23 @@ func TestExpenseIncomeByCategoryWidget(t *testing.T) {
 				t.Errorf("%s income categories are missing %q", path, want)
 			}
 		}
+	}
+}
+
+func TestIncomeCategoryLinkEncodesAmpersand(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"},
+		"new_category": {"Salary & pensions"}, "note": {"Monthly pension"}, "as_of": {"2026-08-01"},
+	})
+
+	page := get(t, srv, "/expenses/all")
+	if !strings.Contains(page, `href="/expenses/all?category=Salary&#43;%26&#43;pensions#entries"`) {
+		t.Fatal("Salary & pensions link is not safely URL-encoded")
+	}
+	filtered := get(t, srv, "/expenses/all?category=Salary+%26+pensions")
+	if !strings.Contains(filtered, "Monthly pension") || !strings.Contains(filtered, "All time entries · Salary &amp; pensions") {
+		t.Error("encoded Salary & pensions filter did not show its transaction")
 	}
 }
 
