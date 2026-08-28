@@ -405,6 +405,22 @@ func TestEntriesCanBeSearchedByNote(t *testing.T) {
 	}
 }
 
+func TestNoteSearchIgnoresOverselectedTableCells(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"15.50"}, "currency": {"CHF"},
+		"new_category": {"Groceries"}, "note": {"Trader Joe's weekly shop"}, "as_of": {"2026-08-02"},
+	})
+
+	// dragging across the Note cell in a browser easily spills into the Amount
+	// and delete-button cells, so the clipboard ends up with extra text after a
+	// tab/newline; that must not break the match.
+	page := get(t, srv, "/expenses?month=2026-08&q="+url.QueryEscape("Trader Joe's weekly shop\t-15.50 CHF\t\n\U0001F5D1"))
+	if !strings.Contains(page, "Trader Joe&#39;s weekly shop") {
+		t.Error("note search failed on a query polluted by adjacent table cells")
+	}
+}
+
 func TestYearAndAllTimeEntriesArePaginated(t *testing.T) {
 	srv := newTestServer(t)
 	for day := 1; day <= 101; day++ {

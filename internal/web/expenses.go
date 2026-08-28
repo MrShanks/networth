@@ -131,7 +131,7 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	subcategory := strings.TrimSpace(r.URL.Query().Get("subcategory"))
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	query := cleanNoteQuery(r.URL.Query().Get("q"))
 	entries := period.Expenses
 	entryTitle := monthName(period.Month) + " entries"
 	if yearly || all {
@@ -382,6 +382,16 @@ func filterByNote(expenses []store.Expense, query string) []store.Expense {
 		}
 	}
 	return filtered
+}
+
+// cleanNoteQuery drops anything past the first tab or newline. Notes are always
+// single-line, so a tab/newline in a pasted search means the user's mouse
+// selection spilled over from the Note cell into a neighbouring table cell.
+func cleanNoteQuery(query string) string {
+	if idx := strings.IndexAny(query, "\t\n\r"); idx >= 0 {
+		query = query[:idx]
+	}
+	return strings.TrimSpace(query)
 }
 
 func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
