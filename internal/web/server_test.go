@@ -801,15 +801,21 @@ func TestImportUploadsBankCSV(t *testing.T) {
 
 // upload posts a CSV to the importer the way the browser form does.
 func upload(t *testing.T, srv *Server, csv string) string {
+	return uploadMany(t, srv, csv)
+}
+
+func uploadMany(t *testing.T, srv *Server, csvs ...string) string {
 	t.Helper()
 
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	part, err := form.CreateFormFile("file", "export.csv")
-	if err != nil {
-		t.Fatalf("build upload: %v", err)
+	for i, csv := range csvs {
+		part, err := form.CreateFormFile("file", fmt.Sprintf("export-%d.csv", i+1))
+		if err != nil {
+			t.Fatalf("build upload: %v", err)
+		}
+		io.WriteString(part, csv)
 	}
-	io.WriteString(part, csv)
 	form.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/expenses/import", &body)
@@ -821,6 +827,51 @@ func upload(t *testing.T, srv *Server, csv string) string {
 		t.Fatalf("import returned %d, want 200", rec.Code)
 	}
 	return rec.Body.String()
+}
+
+func TestMultipleCSVFilesImportAndMatchTogether(t *testing.T) {
+	srv := newTestServer(t)
+	const incoming = `"Transaction date","Account or card number","Description","Income or expense","Amount","Currency","Category"
+"15.07.2026","ACCOUNT-B","Incoming transfer","Income","10'000.00","CHF","Other income"`
+	const outgoing = `"Transaction date","Account or card number","Description","Income or expense","Amount","Currency","Category"
+"15.07.2026","ACCOUNT-A","Outgoing transfer","Expense","-10'000.00","CHF","Account transfers"`
+
+	result := uploadMany(t, srv, incoming, outgoing)
+	if !strings.Contains(result, `class="value">2</strong>`) {
+		t.Error("import result does not report two processed files")
+	}
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil || len(entries) != 2 || entries[0].Kind != store.KindTransfer || entries[1].Kind != store.KindTransfer {
+		t.Fatalf("multi-file transfer pair = %+v, err %v", entries, err)
+	}
+}
+
+func TestMultipleCSVFilesFailAsOneBatch(t *testing.T) {
+	srv := newTestServer(t)
+	const valid = `"Transaction date","Description","Income or expense","Amount","Currency","Category"
+"15.07.2026","Lunch","Expense","-20.00","CHF","Restaurants"`
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	for i, csv := range []string{valid, "not,a,bank,export"} {
+		part, err := form.CreateFormFile("file", fmt.Sprintf("export-%d.csv", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(part, csv)
+	}
+	form.Close()
+	req := httptest.NewRequest(http.MethodPost, "/expenses/import", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("invalid batch returned %d, want redirect", rec.Code)
+	}
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid batch partially imported entries: %+v, err %v", entries, err)
+	}
 }
 
 func TestRefundsAreImportedAndNetOff(t *testing.T) {

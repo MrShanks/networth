@@ -27,7 +27,7 @@
     </div>
   </header>
   <div class="widget-body"><form method="post" action="/expenses/import" enctype="multipart/form-data" class="stack modal-form">
-    <label class="wide"><span>CSV export<span class="required-mark" aria-hidden="true">*</span></span><input type="file" name="file" accept=".csv,text/csv" required></label>
+    <label class="wide"><span>CSV exports<span class="required-mark" aria-hidden="true">*</span></span><input type="file" name="file" accept=".csv,text/csv" multiple required></label>
     <p class="empty small wide">Account transfers, card payments, and investment funding are retained but excluded from income and spending.</p>
     <span class="modal-action"><button type="submit">Import</button></span>
   </form></div>
