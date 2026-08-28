@@ -127,14 +127,18 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	subcategory := strings.TrimSpace(r.URL.Query().Get("subcategory"))
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	entries := period.Expenses
 	entryTitle := monthName(period.Month) + " entries"
 	if yearly || all {
 		entryTitle = period.Month + " entries"
 	}
 	if category != "" {
-		entries = filterExpenses(entries, category, subcategory)
+		entries = filterExpenses(entries, category, subcategory, kind)
 		entryTitle += " · " + category
+		if kind == store.KindIncome {
+			entryTitle += " income"
+		}
 		if subcategory != "" {
 			entryTitle += " · " + subcategory
 		}
@@ -344,11 +348,12 @@ func comparePeriods(leftMonth, rightMonth store.ExpenseMonth) monthComparison {
 	return comparison
 }
 
-func filterExpenses(expenses []store.Expense, category, subcategory string) []store.Expense {
+func filterExpenses(expenses []store.Expense, category, subcategory, kind string) []store.Expense {
 	var filtered []store.Expense
 	for _, expense := range expenses {
 		if strings.EqualFold(expense.Category, category) &&
-			(subcategory == "" || strings.EqualFold(expense.Subcategory, subcategory)) {
+			(subcategory == "" || strings.EqualFold(expense.Subcategory, subcategory)) &&
+			(kind == "" || expense.Kind == kind) {
 			filtered = append(filtered, expense)
 		}
 	}

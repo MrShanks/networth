@@ -432,7 +432,7 @@ func TestExpenseIncomeByCategoryWidget(t *testing.T) {
 			t.Fatalf("%s is missing the income-category widget", path)
 		}
 		widget := page[start:end]
-		for _, want := range []string{"Income by category", "Salary", "5,000.00", "87%", "Bonus", "750.00", "13%", `category=Salary#entries`} {
+		for _, want := range []string{"Income by category", "Salary", "5,000.00", "87%", "Bonus", "750.00", "13%", `category=Salary&amp;kind=income#entries`} {
 			if !strings.Contains(widget, want) {
 				t.Errorf("%s income categories are missing %q", path, want)
 			}
@@ -442,17 +442,19 @@ func TestExpenseIncomeByCategoryWidget(t *testing.T) {
 
 func TestIncomeCategoryLinkEncodesAmpersand(t *testing.T) {
 	srv := newTestServer(t)
-	post(t, srv, "/expenses", url.Values{
-		"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"},
-		"new_category": {"Salary & pensions"}, "note": {"Monthly pension"}, "as_of": {"2026-08-01"},
-	})
+	for _, entry := range []url.Values{
+		{"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary & pensions"}, "note": {"Monthly pension"}, "as_of": {"2026-08-01"}},
+		{"kind": {"expense"}, "amount": {"200"}, "currency": {"CHF"}, "new_category": {"Salary & pensions"}, "note": {"Pension fee"}, "as_of": {"2026-08-02"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
 
 	page := get(t, srv, "/expenses/all")
-	if !strings.Contains(page, `href="/expenses/all?category=Salary&#43;%26&#43;pensions#entries"`) {
+	if !strings.Contains(page, `href="/expenses/all?category=Salary&#43;%26&#43;pensions&amp;kind=income#entries"`) {
 		t.Fatal("Salary & pensions link is not safely URL-encoded")
 	}
-	filtered := get(t, srv, "/expenses/all?category=Salary+%26+pensions")
-	if !strings.Contains(filtered, "Monthly pension") || !strings.Contains(filtered, "All time entries · Salary &amp; pensions") {
+	filtered := get(t, srv, "/expenses/all?category=Salary+%26+pensions&kind=income")
+	if !strings.Contains(filtered, "Monthly pension") || strings.Contains(filtered, "Pension fee") || !strings.Contains(filtered, "All time entries · Salary &amp; pensions income") {
 		t.Error("encoded Salary & pensions filter did not show its transaction")
 	}
 }

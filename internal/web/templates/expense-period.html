@@ -89,7 +89,7 @@
   {{template "widgethead" "Income by category"}}
   <div class="widget-body">
     {{if .IncomeBreakdown}}<table class="category-breakdown"><thead><tr><th>Category</th><th class="num">Total</th><th class="num">Share</th></tr></thead><tbody>
-      {{range .IncomeBreakdown}}<tr><td colspan="3"><div class="category-summary"><a class="category-link" href="{{$.FilterPrefix}}category={{urlquery .Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div></td></tr>{{end}}
+      {{range .IncomeBreakdown}}<tr><td colspan="3"><div class="category-summary"><a class="category-link" href="{{$.FilterPrefix}}category={{urlquery .Category}}&amp;kind=income#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div></td></tr>{{end}}
     </tbody></table>{{else}}<p class="empty">No income recorded for this {{if $.IsAll}}period{{else if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
   </div>
 </section>
