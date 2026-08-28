@@ -150,6 +150,16 @@ func (s *Store) DeleteExpensesForMonth(ctx context.Context, month string) (int, 
 	return int(n), nil
 }
 
+// DeleteAllExpenses removes every stored cash-flow entry, including transfers.
+func (s *Store) DeleteAllExpenses(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM expenses`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // ImportExpenses adds entries in bulk, leaving out any that are already
 // stored, so re-importing the same export changes nothing. Identical entries
 // recorded twice on purpose are kept: only the surplus is treated as duplicate.

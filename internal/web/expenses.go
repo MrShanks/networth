@@ -36,13 +36,14 @@ type categoryBreakdown struct {
 }
 
 type transactionsData struct {
-	Base       string
-	Currencies []string
-	Categories []string
-	Rules      []ruleView
-	Today      string
-	Notice     string
-	Error      string
+	Base            string
+	Currencies      []string
+	Categories      []string
+	Rules           []ruleView
+	HasTransactions bool
+	Today           string
+	Notice          string
+	Error           string
 }
 
 func periodName(period string, yearly bool) string {
@@ -144,7 +145,8 @@ func (s *Server) handleTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "transactions.html", transactionsData{
 		Base: store.Base, Currencies: store.Currencies, Categories: v.report.UsedCategories(),
-		Rules: ruleViews(rules, v.report), Today: time.Now().Format("2006-01-02"),
+		Rules: ruleViews(rules, v.report), HasTransactions: len(v.report.Months) > 0,
+		Today:  time.Now().Format("2006-01-02"),
 		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
 	})
 }
@@ -340,6 +342,15 @@ func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirectTo(w, r, "/expenses", "")
+}
+
+func (s *Server) handleDeleteAllTransactions(w http.ResponseWriter, r *http.Request) {
+	deleted, err := s.store.DeleteAllExpenses(r.Context())
+	if err != nil {
+		s.redirectTo(w, r, "/transactions", "could not delete transactions: "+err.Error())
+		return
+	}
+	s.noticeTo(w, r, "/transactions", fmt.Sprintf("Deleted %d transaction%s.", deleted, plural(deleted, "", "s")))
 }
 
 // handleAddRule saves a rule and applies it to what is already stored, so a

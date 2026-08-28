@@ -115,6 +115,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /expenses/{id}/subcategory", s.handleSetExpenseSubcategory)
 	s.mux.HandleFunc("POST /expenses/{id}/delete", s.handleDeleteExpense)
 	s.mux.HandleFunc("POST /expenses/month/{month}/delete", s.handleDeleteMonth)
+	s.mux.HandleFunc("POST /expenses/delete-all", s.handleDeleteAllTransactions)
 	s.mux.HandleFunc("POST /rules", s.handleAddRule)
 	s.mux.HandleFunc("POST /rules/{id}", s.handleUpdateRule)
 	s.mux.HandleFunc("POST /rules/{id}/delete", s.handleDeleteRule)

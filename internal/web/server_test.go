@@ -958,6 +958,32 @@ func TestDeleteMonthClearsOnlyThatMonth(t *testing.T) {
 	}
 }
 
+func TestDeleteAllTransactionsIncludesTransfers(t *testing.T) {
+	srv := newTestServer(t)
+	for _, kind := range []string{store.KindExpense, store.KindTransfer} {
+		post(t, srv, "/expenses", url.Values{
+			"kind": {kind}, "amount": {"100"}, "currency": {"CHF"},
+			"new_category": {"Test"}, "as_of": {"2026-08-05"},
+		})
+	}
+
+	if page := get(t, srv, "/transactions"); !strings.Contains(page, `action="/expenses/delete-all"`) {
+		t.Fatal("Transactions page has no delete-all action")
+	}
+	post(t, srv, "/expenses/delete-all", url.Values{})
+
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("stored transactions = %d, want 0", len(entries))
+	}
+	if page := get(t, srv, "/transactions"); strings.Contains(page, `action="/expenses/delete-all"`) {
+		t.Error("delete-all action remains visible with no transactions")
+	}
+}
+
 func TestCategoryRuleAppliesToOldAndNewEntries(t *testing.T) {
 	srv := newTestServer(t)
 
