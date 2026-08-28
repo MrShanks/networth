@@ -484,6 +484,8 @@ button.add-row { color: var(--accent); border-color: rgba(106, 166, 255, 0.35); 
 .category-link:hover { color: var(--accent); }
 .entry-category-form, .entry-subcategory-form { display: inline-block; vertical-align: middle; }
 .entry-subcategory-form { margin-left: 0.25rem; }
+.entry-category-form.saving, .entry-subcategory-form.saving { opacity: 0.6; }
+.inline-save-status { margin: 0 0 0.75rem; color: var(--down); font-size: 0.82rem; }
 #entries .widget-body { overflow-x: auto; }
 .entry-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; color: var(--muted); font-size: 0.82rem; }
 .entries-table + .entry-pager { margin: 0.75rem 0 0; }

@@ -403,6 +403,9 @@ func (s *Server) handleSetExpenseCategory(w http.ResponseWriter, r *http.Request
 	if err == nil {
 		err = s.store.SetExpenseCategory(r.Context(), id, r.FormValue("category"))
 	}
+	if inlineExpenseUpdate(w, r, err) {
+		return
+	}
 	values := url.Values{}
 	if month := r.FormValue("month"); month != "" {
 		values.Set("month", month)
@@ -425,6 +428,9 @@ func (s *Server) handleSetExpenseSubcategory(w http.ResponseWriter, r *http.Requ
 	if err == nil {
 		err = s.store.SetExpenseSubcategory(r.Context(), id, r.FormValue("subcategory"))
 	}
+	if inlineExpenseUpdate(w, r, err) {
+		return
+	}
 	values := url.Values{}
 	if month := r.FormValue("month"); month != "" {
 		values.Set("month", month)
@@ -440,6 +446,18 @@ func (s *Server) handleSetExpenseSubcategory(w http.ResponseWriter, r *http.Requ
 		target += "?" + query
 	}
 	http.Redirect(w, r, target+"#entries", http.StatusSeeOther)
+}
+
+func inlineExpenseUpdate(w http.ResponseWriter, r *http.Request, err error) bool {
+	if r.Header.Get("X-Requested-With") != "fetch" {
+		return false
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func (s *Server) handleDeleteMonth(w http.ResponseWriter, r *http.Request) {

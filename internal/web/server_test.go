@@ -576,6 +576,36 @@ func TestExpenseCategoryCanBeReassigned(t *testing.T) {
 	}
 }
 
+func TestExpenseCategoryCanBeUpdatedInline(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"25"}, "currency": {"CHF"},
+		"new_category": {"Other"}, "as_of": {"2026-08-02"},
+	})
+
+	for _, endpoint := range []struct {
+		path string
+		form url.Values
+	}{
+		{path: "/expenses/1/category", form: url.Values{"category": {"Taxes"}}},
+		{path: "/expenses/1/subcategory", form: url.Values{"subcategory": {"Authorities"}}},
+	} {
+		req := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(endpoint.form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Requested-With", "fetch")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent || rec.Header().Get("Location") != "" {
+			t.Errorf("%s response = %d, location %q; want 204 without redirect", endpoint.path, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil || len(entries) != 1 || entries[0].Category != "Taxes" || entries[0].Subcategory != "Authorities" {
+		t.Fatalf("inline-updated expense = %+v, err %v", entries, err)
+	}
+}
+
 func TestExpenseSubcategoryCanBeSetInline(t *testing.T) {
 	srv := newTestServer(t)
 	post(t, srv, "/expenses", url.Values{

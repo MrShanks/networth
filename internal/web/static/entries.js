@@ -20,3 +20,36 @@ document.querySelectorAll('[data-sortable-entries]').forEach((table) => {
     });
   });
 });
+
+const saveStatus = document.querySelector('[data-entry-save-status]');
+document.querySelectorAll('.entry-category-form, .entry-subcategory-form').forEach((form) => {
+  const control = form.querySelector('select, input:not([type="hidden"])');
+  if (!control) return;
+  control.dataset.savedValue = control.value;
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    control.disabled = true;
+    form.classList.add('saving');
+    if (saveStatus) saveStatus.hidden = true;
+
+    try {
+      const response = await fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: {'X-Requested-With': 'fetch'},
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not save the change.');
+      control.dataset.savedValue = control.value;
+    } catch (error) {
+      control.value = control.dataset.savedValue;
+      if (saveStatus) {
+        saveStatus.textContent = error.message || 'Could not save the change.';
+        saveStatus.hidden = false;
+      }
+    } finally {
+      control.disabled = false;
+      form.classList.remove('saving');
+    }
+  });
+});
