@@ -382,6 +382,29 @@ func TestAllTimeExpensesAndSalaryAverages(t *testing.T) {
 	}
 }
 
+func TestEntriesCanBeSearchedByNote(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"12"}, "currency": {"CHF"},
+		"new_category": {"Food"}, "note": {"Corner shop groceries"}, "as_of": {"2026-08-02"},
+	})
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"8"}, "currency": {"CHF"},
+		"new_category": {"Food"}, "note": {"Coffee with a friend"}, "as_of": {"2026-08-05"},
+	})
+
+	page := get(t, srv, "/expenses?month=2026-08&q=corner")
+	if !strings.Contains(page, "Corner shop groceries") {
+		t.Error("note search did not return the matching entry")
+	}
+	if strings.Contains(page, "Coffee with a friend") {
+		t.Error("note search returned a non-matching entry")
+	}
+	if !strings.Contains(page, `value="corner"`) {
+		t.Error("note search did not keep the query in the search box")
+	}
+}
+
 func TestYearAndAllTimeEntriesArePaginated(t *testing.T) {
 	srv := newTestServer(t)
 	for day := 1; day <= 101; day++ {

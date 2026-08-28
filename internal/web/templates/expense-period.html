@@ -109,6 +109,15 @@
     <div class="widget-tools">{{if and .Period.Expenses (not .Category) (not .IsYear)}}<form method="post" action="/expenses/month/{{.Period.Month}}/delete" onsubmit="return confirm('Delete all entries in this month?')"><button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button></form>{{end}}{{template "widgettools"}}</div>
   </header>
   <div class="widget-body">
+    <form class="entry-search" method="get" action="{{.SearchAction}}">
+      {{if not .IsAll}}{{if .IsYear}}<input type="hidden" name="year" value="{{.Period.Month}}">{{else}}<input type="hidden" name="month" value="{{.Period.Month}}">{{end}}{{end}}
+      {{with .Category}}<input type="hidden" name="category" value="{{.}}">{{end}}
+      {{with .Subcategory}}<input type="hidden" name="subcategory" value="{{.}}">{{end}}
+      {{with .Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
+      <input type="search" name="q" value="{{.Query}}" placeholder="Search by note&hellip;" aria-label="Search transactions by note">
+      <button type="submit" class="pill-btn">Search</button>
+      {{if .Query}}<a class="pill-btn" href="{{.PeriodURL}}#entries">Clear</a>{{end}}
+    </form>
     <p class="inline-save-status" data-entry-save-status role="status" aria-live="polite" hidden></p>
     {{template "entrypager" .}}
     {{if .Entries}}<table class="entries-table" data-sortable-entries><thead><tr><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="date" data-sort-type="text">Date</button></th><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="category" data-sort-type="text">Category</button></th><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="note" data-sort-type="text">Note</button></th><th class="num" aria-sort="none"><button type="button" class="sort-heading" data-sort-column="amount" data-sort-type="number">Amount</button></th><th></th></tr></thead><tbody>

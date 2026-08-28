@@ -29,6 +29,7 @@ document.querySelectorAll('.entry-category-form, .entry-subcategory-form').forEa
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const body = new FormData(form); // must snapshot before disabling, or the control drops out of the form data
     control.disabled = true;
     form.classList.add('saving');
     if (saveStatus) saveStatus.hidden = true;
@@ -36,7 +37,7 @@ document.querySelectorAll('.entry-category-form, .entry-subcategory-form').forEa
     try {
       const response = await fetch(form.action, {
         method: 'POST',
-        body: new FormData(form),
+        body,
         headers: {'X-Requested-With': 'fetch'},
       });
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not save the change.');

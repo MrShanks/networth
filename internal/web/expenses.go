@@ -22,6 +22,9 @@ type expensePeriodData struct {
 	EntryTitle      string
 	Category        string
 	Subcategory     string
+	Kind            string
+	Query           string
+	SearchAction    string
 	Categories      []string
 	Breakdown       []categoryBreakdown
 	IncomeBreakdown []store.CategoryTotal
@@ -128,6 +131,7 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	subcategory := strings.TrimSpace(r.URL.Query().Get("subcategory"))
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	entries := period.Expenses
 	entryTitle := monthName(period.Month) + " entries"
 	if yearly || all {
@@ -142,6 +146,10 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 		if subcategory != "" {
 			entryTitle += " · " + subcategory
 		}
+	}
+	if query != "" {
+		entries = filterByNote(entries, query)
+		entryTitle += fmt.Sprintf(" · %q", query)
 	}
 	entryTotal := len(entries)
 	entryFrom, entryTo := 0, entryTotal
@@ -169,10 +177,13 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 		months = len(v.report.Months)
 	}
 	periodURL := "/expenses?month=" + period.Month
+	searchAction := "/expenses"
 	if yearly {
 		periodURL = "/expenses/year?year=" + period.Month
+		searchAction = "/expenses/year"
 	} else if all {
 		periodURL = "/expenses/all"
+		searchAction = "/expenses/all"
 	}
 	filterPrefix := periodURL + "&"
 	if all {
@@ -182,6 +193,7 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	s.render(w, "expense-period.html", expensePeriodData{
 		Base: store.Base, Period: period, Comparison: comparePeriods(previous, period),
 		Entries: entries, EntryTitle: entryTitle, Category: category, Subcategory: subcategory,
+		Kind: kind, Query: query, SearchAction: searchAction,
 		Categories: v.report.UsedCategories(), Breakdown: categoryBreakdowns(period),
 		IncomeBreakdown: period.IncomeCategories,
 		SalaryAverages:  salaryAverages(period, months),
@@ -354,6 +366,18 @@ func filterExpenses(expenses []store.Expense, category, subcategory, kind string
 		if strings.EqualFold(expense.Category, category) &&
 			(subcategory == "" || strings.EqualFold(expense.Subcategory, subcategory)) &&
 			(kind == "" || expense.Kind == kind) {
+			filtered = append(filtered, expense)
+		}
+	}
+	return filtered
+}
+
+// filterByNote keeps entries whose note contains query, case-insensitively.
+func filterByNote(expenses []store.Expense, query string) []store.Expense {
+	query = strings.ToLower(query)
+	var filtered []store.Expense
+	for _, expense := range expenses {
+		if strings.Contains(strings.ToLower(expense.Note), query) {
 			filtered = append(filtered, expense)
 		}
 	}
