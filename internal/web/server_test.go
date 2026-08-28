@@ -227,10 +227,13 @@ func TestGraphsShowSalaryBySecondaryCategory(t *testing.T) {
 		t.Fatal("salary-by-secondary-category graph is missing")
 	}
 	panel := page[start:end]
-	for _, want := range []string{"Salary by secondary category", "Primary job", "Pension", `class="stack-band series-1"`, "2026-01", "2026-02"} {
+	for _, want := range []string{"Salary by secondary category", "Primary job", "Pension", `class="line series-1"`, `class="line series-2"`, "2026-01, Primary job: 5000.00", "2026-02, Primary job: 5100.00"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("salary secondary-category graph is missing %q", want)
 		}
+	}
+	if strings.Contains(panel, `class="stack-band`) {
+		t.Error("salary secondary-category graph should use lines, not stacked bands")
 	}
 }
 

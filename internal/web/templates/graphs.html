@@ -32,6 +32,26 @@
 </div>
 {{end}}
 
+{{define "multilinechart"}}
+<div class="chart-legend">
+  {{range .Series}}<span><i class="swatch {{.Class}}"></i>{{.Label}}</span>{{end}}
+</div>
+<div class="chart-wrap">
+  <svg class="chart" viewBox="0 0 {{.Width}} {{.Height}}" role="img">
+    {{range .YTicks}}
+      <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Width}}" y2="{{.Y}}"/>
+      <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+    {{end}}
+    {{range .Series}}{{$series := .}}
+      <polyline class="line {{.Class}}" points="{{.Points}}"/>
+      {{range .Dots}}<circle class="dot graph-point {{$series.Class}}-dot" cx="{{.X}}" cy="{{.Y}}" r="4" tabindex="0" aria-label="{{.Text}}" data-tooltip="{{.Text}}"><title>{{.Text}}</title></circle>{{end}}
+    {{end}}
+    {{range .XTicks}}<text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>{{end}}
+  </svg>
+  <div class="graph-tooltip" role="tooltip" hidden></div>
+</div>
+{{end}}
+
 {{define "graphs.html"}}<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -160,7 +180,7 @@
   <div class="widget-body">
     {{if .SalaryBySubcategory.Empty}}
       <p class="empty">Add secondary categories to salary transactions to compare them.</p>
-    {{else}}{{template "stackedchart" .SalaryBySubcategory}}{{end}}
+    {{else}}{{template "multilinechart" .SalaryBySubcategory}}{{end}}
   </div>
 </section>
 

@@ -13,7 +13,7 @@ import (
 type graphsData struct {
 	Base                string
 	Salary              Chart
-	SalaryBySubcategory StackedChart
+	SalaryBySubcategory MultiLineChart
 	Income              Chart
 	NetWorth            Chart
 	Investments         Chart
@@ -75,11 +75,24 @@ type StackedChart struct {
 	Empty         bool
 }
 
+type MultiLineSeries struct {
+	Class, Label, Points string
+	Dots                 []chartLabel
+}
+
+type MultiLineChart struct {
+	Width, Height float64
+	Series        []MultiLineSeries
+	YTicks        []chartLabel
+	XTicks        []chartLabel
+	Empty         bool
+}
+
 func buildSalaryChart(months []store.ExpenseMonth) Chart {
 	return buildMonthlyAmountChart(months, func(month store.ExpenseMonth) money.Amount { return month.Salary })
 }
 
-func buildSalaryBySubcategory(months []store.ExpenseMonth) StackedChart {
+func buildSalaryBySubcategory(months []store.ExpenseMonth) MultiLineChart {
 	totals := map[string]money.Amount{}
 	for _, month := range months {
 		for _, subcategory := range month.IncomeSubcategories {
@@ -96,11 +109,9 @@ func buildSalaryBySubcategory(months []store.ExpenseMonth) StackedChart {
 	if len(labels) > 7 {
 		labels = labels[:7]
 	}
-	classes := make([]string, len(labels))
 	values := make([][]float64, len(labels))
 	indexes := make(map[string]int, len(labels))
 	for i, label := range labels {
-		classes[i] = fmt.Sprintf("series-%d", i+1)
 		indexes[label] = i
 	}
 	dates := make([]string, len(months))
@@ -116,7 +127,58 @@ func buildSalaryBySubcategory(months []store.ExpenseMonth) StackedChart {
 			values[i] = appendValue(values[i], monthIndex, 0)
 		}
 	}
-	return buildStackedChart(dates, labels, classes, values)
+	return buildMultiLineChart(dates, labels, values)
+}
+
+func buildMultiLineChart(dates, labels []string, values [][]float64) MultiLineChart {
+	chart := MultiLineChart{Width: chartWidth, Height: chartHeight}
+	if len(dates) == 0 || len(labels) == 0 {
+		chart.Empty = true
+		return chart
+	}
+	top := 0.0
+	for _, seriesValues := range values {
+		for _, value := range seriesValues {
+			top = max(top, value)
+		}
+	}
+	if top <= 0 {
+		chart.Empty = true
+		return chart
+	}
+	plotW := float64(chartWidth - 2*chartPadX)
+	plotH := float64(chartHeight - 2*chartPadY)
+	xAt := func(index int) float64 {
+		if len(dates) == 1 {
+			return chartPadX + plotW/2
+		}
+		return chartPadX + plotW*float64(index)/float64(len(dates)-1)
+	}
+	yAt := func(value float64) float64 { return chartPadY + plotH*(1-value/top) }
+	for seriesIndex, label := range labels {
+		series := MultiLineSeries{Class: fmt.Sprintf("series-%d", seriesIndex+1), Label: label}
+		var points strings.Builder
+		for dateIndex, date := range dates {
+			value := 0.0
+			if seriesIndex < len(values) && dateIndex < len(values[seriesIndex]) {
+				value = values[seriesIndex][dateIndex]
+			}
+			x, y := xAt(dateIndex), yAt(value)
+			fmt.Fprintf(&points, "%.1f,%.1f ", x, y)
+			series.Dots = append(series.Dots, chartLabel{X: x, Y: y, Text: fmt.Sprintf("%s, %s: %.2f", date, label, value)})
+		}
+		series.Points = strings.TrimSpace(points.String())
+		chart.Series = append(chart.Series, series)
+	}
+	for i := 0; i <= 4; i++ {
+		value := top * float64(i) / 4
+		chart.YTicks = append(chart.YTicks, chartLabel{X: chartPadX, Y: yAt(value), Text: shortNumber(value)})
+	}
+	step := max(1, len(dates)/6)
+	for i := 0; i < len(dates); i += step {
+		chart.XTicks = append(chart.XTicks, chartLabel{X: xAt(i), Y: chartHeight - 4, Text: dates[i]})
+	}
+	return chart
 }
 
 func salaryCategory(category string) bool {

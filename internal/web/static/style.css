@@ -718,6 +718,20 @@ dialog.modal::backdrop {
 .series-5 { fill: #f08c6c; background: #f08c6c; }
 .series-6 { fill: #72c7d4; background: #72c7d4; }
 .series-7 { fill: #8b93a7; background: #8b93a7; }
+.chart .line.series-1 { stroke: #6aa6ff; }
+.chart .line.series-2 { stroke: #56c596; }
+.chart .line.series-3 { stroke: #e5b84b; }
+.chart .line.series-4 { stroke: #c792ea; }
+.chart .line.series-5 { stroke: #f08c6c; }
+.chart .line.series-6 { stroke: #72c7d4; }
+.chart .line.series-7 { stroke: #8b93a7; }
+.chart .series-1-dot { fill: #6aa6ff; }
+.chart .series-2-dot { fill: #56c596; }
+.chart .series-3-dot { fill: #e5b84b; }
+.chart .series-4-dot { fill: #c792ea; }
+.chart .series-5-dot { fill: #f08c6c; }
+.chart .series-6-dot { fill: #72c7d4; }
+.chart .series-7-dot { fill: #8b93a7; }
 .chart-keys, .chart-legend {
   display: flex;
   flex-wrap: wrap;
