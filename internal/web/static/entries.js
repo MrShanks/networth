@@ -54,3 +54,27 @@ document.querySelectorAll('.entry-category-form, .entry-subcategory-form').forEa
     }
   });
 });
+
+document.querySelectorAll('.entry-delete-form').forEach((form) => {
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    if (saveStatus) saveStatus.hidden = true;
+
+    try {
+      const response = await fetch(form.action, {
+        method: 'POST',
+        headers: {'X-Requested-With': 'fetch'},
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not delete the transaction.');
+      form.closest('tr').remove();
+    } catch (error) {
+      button.disabled = false;
+      if (saveStatus) {
+        saveStatus.textContent = error.message || 'Could not delete the transaction.';
+        saveStatus.hidden = false;
+      }
+    }
+  });
+});

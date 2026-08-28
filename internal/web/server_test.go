@@ -645,6 +645,27 @@ func TestExpenseCategoryCanBeUpdatedInline(t *testing.T) {
 	}
 }
 
+func TestExpenseCanBeDeletedInline(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/expenses", url.Values{
+		"kind": {"expense"}, "amount": {"25"}, "currency": {"CHF"},
+		"new_category": {"Other"}, "as_of": {"2026-08-02"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/expenses/1/delete", nil)
+	req.Header.Set("X-Requested-With", "fetch")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Location") != "" {
+		t.Fatalf("response = %d, location %q; want 204 without redirect", rec.Code, rec.Header().Get("Location"))
+	}
+
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("expenses after inline delete = %+v, err %v", entries, err)
+	}
+}
+
 func TestExpenseSubcategoryCanBeSetInline(t *testing.T) {
 	srv := newTestServer(t)
 	post(t, srv, "/expenses", url.Values{

@@ -421,11 +421,13 @@ func (s *Server) handleAddExpense(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteExpense(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirectTo(w, r, "/expenses", "invalid id")
+	if err == nil {
+		err = s.store.DeleteExpense(r.Context(), id)
+	}
+	if inlineExpenseUpdate(w, r, err) {
 		return
 	}
-	if err := s.store.DeleteExpense(r.Context(), id); err != nil {
+	if err != nil {
 		s.redirectTo(w, r, "/expenses", err.Error())
 		return
 	}
