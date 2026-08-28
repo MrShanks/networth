@@ -382,6 +382,39 @@ func TestAllTimeExpensesAndSalaryAverages(t *testing.T) {
 	}
 }
 
+func TestYearAndAllTimeEntriesArePaginated(t *testing.T) {
+	srv := newTestServer(t)
+	for day := 1; day <= 101; day++ {
+		month := 1 + (day-1)/28
+		date := fmt.Sprintf("2026-%02d-%02d", month, 1+(day-1)%28)
+		post(t, srv, "/expenses", url.Values{
+			"kind": {"expense"}, "amount": {"1"}, "currency": {"CHF"},
+			"new_category": {"Food"}, "note": {fmt.Sprintf("Entry %03d", day)}, "as_of": {date},
+		})
+	}
+
+	for _, path := range []string{"/expenses/year?year=2026", "/expenses/all"} {
+		page := get(t, srv, path)
+		if rows := strings.Count(page, `data-entry-id=`); rows != 100 {
+			t.Errorf("%s rows = %d, want 100", path, rows)
+		}
+		if !strings.Contains(page, "Showing 1–100 of 101") || !strings.Contains(page, `>Next</a>`) {
+			t.Errorf("%s is missing first-page navigation", path)
+		}
+		separator := "?"
+		if strings.Contains(path, "?") {
+			separator = "&"
+		}
+		second := get(t, srv, path+separator+"page=2")
+		if rows := strings.Count(second, `data-entry-id=`); rows != 1 {
+			t.Errorf("%s second-page rows = %d, want 1", path, rows)
+		}
+		if !strings.Contains(second, "Showing 101–101 of 101") || !strings.Contains(second, `>Previous</a>`) {
+			t.Errorf("%s is missing second-page navigation", path)
+		}
+	}
+}
+
 func TestExpenseIncomeByCategoryWidget(t *testing.T) {
 	srv := newTestServer(t)
 	for _, entry := range []url.Values{

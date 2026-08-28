@@ -28,6 +28,11 @@ type expensePeriodData struct {
 	SalaryAverages  []salaryAverage
 	PeriodURL       string
 	FilterPrefix    string
+	EntryTotal      int
+	EntryFrom       int
+	EntryTo         int
+	PreviousPageURL string
+	NextPageURL     string
 	Bars            BarChart
 	IsYear          bool
 	IsAll           bool
@@ -134,6 +139,21 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 			entryTitle += " · " + subcategory
 		}
 	}
+	entryTotal := len(entries)
+	entryFrom, entryTo := 0, entryTotal
+	previousPageURL, nextPageURL := "", ""
+	if yearly || all {
+		page := queryPage(r)
+		entryFrom = min((page-1)*100, entryTotal)
+		entryTo = min(entryFrom+100, entryTotal)
+		entries = entries[entryFrom:entryTo]
+		if page > 1 {
+			previousPageURL = expensePageURL(r, page-1)
+		}
+		if entryTo < entryTotal {
+			nextPageURL = expensePageURL(r, page+1)
+		}
+	}
 	bars := BarChart{Width: chartWidth, Height: chartHeight, Empty: true}
 	if yearly {
 		bars = buildBars(monthsInYear(v.report.Months, selected), "")
@@ -162,9 +182,33 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 		IncomeBreakdown: period.IncomeCategories,
 		SalaryAverages:  salaryAverages(period, months),
 		PeriodURL:       periodURL, FilterPrefix: filterPrefix,
+		EntryTotal: entryTotal, EntryFrom: entryFrom + 1, EntryTo: entryTo,
+		PreviousPageURL: previousPageURL, NextPageURL: nextPageURL,
 		Bars: bars, IsYear: yearly, IsAll: all,
 		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
 	})
+}
+
+func queryPage(r *http.Request) int {
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func expensePageURL(r *http.Request, page int) string {
+	query := r.URL.Query()
+	if page <= 1 {
+		query.Del("page")
+	} else {
+		query.Set("page", strconv.Itoa(page))
+	}
+	url := r.URL.Path
+	if encoded := query.Encode(); encoded != "" {
+		url += "?" + encoded
+	}
+	return url + "#entries"
 }
 
 func salaryAverages(period store.ExpenseMonth, months int) []salaryAverage {

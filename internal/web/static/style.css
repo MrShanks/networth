@@ -477,6 +477,8 @@ button.add-row { color: var(--accent); border-color: rgba(106, 166, 255, 0.35); 
 .entry-category-form, .entry-subcategory-form { display: inline-block; vertical-align: middle; }
 .entry-subcategory-form { margin-left: 0.25rem; }
 #entries .widget-body { overflow-x: auto; }
+.entry-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; color: var(--muted); font-size: 0.82rem; }
+.entry-pager .pill-btn { text-decoration: none; }
 input.entry-subcategory {
   width: 6.5rem;
   padding-inline: 0.55rem;
