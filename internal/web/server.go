@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MrShanks/networth/internal/fx"
@@ -574,8 +575,15 @@ func (s *Server) noticeTo(w http.ResponseWriter, r *http.Request, target, msg st
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+		if isClientDisconnect(err) {
+			return
+		}
 		s.log.Error("render template", "template", name, "error", err)
 	}
+}
+
+func isClientDisconnect(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {

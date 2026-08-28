@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/MrShanks/networth/internal/fx"
@@ -125,6 +126,20 @@ func TestPagesRender(t *testing.T) {
 				t.Errorf("page does not mention %q", page.wants)
 			}
 		})
+	}
+}
+
+func TestClientDisconnectErrors(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("write tcp: %w", syscall.EPIPE),
+		fmt.Errorf("write tcp: %w", syscall.ECONNRESET),
+	} {
+		if !isClientDisconnect(err) {
+			t.Fatalf("disconnect error was not identifiable: %v", err)
+		}
+	}
+	if isClientDisconnect(fmt.Errorf("template execution failed")) {
+		t.Error("ordinary template error was classified as a disconnect")
 	}
 }
 
