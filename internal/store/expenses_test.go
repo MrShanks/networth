@@ -310,6 +310,26 @@ func TestIncomeCategoriesAreConvertedSortedAndAggregatedByYear(t *testing.T) {
 	}
 }
 
+func TestAllAggregatesEveryRecordedMonth(t *testing.T) {
+	report := BuildExpenseReport([]Expense{
+		{Kind: KindExpense, AsOf: "2025-12-01", Category: "Rent", Currency: "CHF", Amount: 100000},
+		{Kind: KindIncome, AsOf: "2025-12-20", Category: "Salary", Subcategory: "Primary job", Currency: "CHF", Amount: 500000},
+		{Kind: KindExpense, AsOf: "2026-01-01", Category: "Rent", Currency: "CHF", Amount: 110000},
+		{Kind: KindIncome, AsOf: "2026-01-20", Category: "Salary", Subcategory: "Primary job", Currency: "CHF", Amount: 520000},
+	}, map[string]float64{"CHF": 1})
+
+	all := report.All()
+	if all.Month != "All time" || all.Total != 210000 || all.Income != 1020000 || all.Salary != 1020000 {
+		t.Fatalf("all-time totals = %+v", all)
+	}
+	if len(all.Expenses) != 4 || len(all.Categories) != 1 || all.Categories[0].Total != 210000 {
+		t.Fatalf("all-time details = %+v", all)
+	}
+	if len(all.IncomeSubcategories) != 1 || all.IncomeSubcategories[0].Total != 1020000 {
+		t.Fatalf("all-time income subcategories = %+v", all.IncomeSubcategories)
+	}
+}
+
 func TestTaxesAreSeparateFromSpending(t *testing.T) {
 	expenses := append(testExpenses(),
 		Expense{ID: 5, AsOf: "2026-08-20", Category: "Tax payments", Currency: "CHF", Amount: 50000},

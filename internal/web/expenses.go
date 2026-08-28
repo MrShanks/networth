@@ -25,10 +25,19 @@ type expensePeriodData struct {
 	Categories      []string
 	Breakdown       []categoryBreakdown
 	IncomeBreakdown []store.CategoryTotal
+	SalaryAverages  []salaryAverage
+	PeriodURL       string
+	FilterPrefix    string
 	Bars            BarChart
 	IsYear          bool
+	IsAll           bool
 	Notice          string
 	Error           string
+}
+
+type salaryAverage struct {
+	Subcategory string
+	Average     money.Amount
 }
 
 type categoryBreakdown struct {
@@ -47,8 +56,8 @@ type transactionsData struct {
 	Error           string
 }
 
-func periodName(period string, yearly bool) string {
-	if yearly {
+func periodName(period string, yearly, all bool) string {
+	if yearly || all {
 		return period
 	}
 	return monthName(period)
@@ -73,14 +82,18 @@ type ruleView struct {
 }
 
 func (s *Server) handleExpenses(w http.ResponseWriter, r *http.Request) {
-	s.handleExpensePeriod(w, r, false)
+	s.handleExpensePeriod(w, r, false, false)
 }
 
 func (s *Server) handleYearExpenses(w http.ResponseWriter, r *http.Request) {
-	s.handleExpensePeriod(w, r, true)
+	s.handleExpensePeriod(w, r, true, false)
 }
 
-func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yearly bool) {
+func (s *Server) handleAllExpenses(w http.ResponseWriter, r *http.Request) {
+	s.handleExpensePeriod(w, r, false, true)
+}
+
+func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yearly, all bool) {
 	v, err := s.load(r.Context())
 	if err != nil {
 		s.fail(w, err)
@@ -99,6 +112,8 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	if yearly {
 		period = v.report.Year(selected)
 		previousKey = previousYear(selected)
+	} else if all {
+		period = v.report.All()
 	}
 	previous, _ := v.report.Find(previousKey)
 	if yearly {
@@ -109,7 +124,7 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	subcategory := strings.TrimSpace(r.URL.Query().Get("subcategory"))
 	entries := period.Expenses
 	entryTitle := monthName(period.Month) + " entries"
-	if yearly {
+	if yearly || all {
 		entryTitle = period.Month + " entries"
 	}
 	if category != "" {
@@ -123,15 +138,50 @@ func (s *Server) handleExpensePeriod(w http.ResponseWriter, r *http.Request, yea
 	if yearly {
 		bars = buildBars(monthsInYear(v.report.Months, selected), "")
 	}
+	months := 1
+	if yearly {
+		months = len(monthsInYear(v.report.Months, selected))
+	} else if all {
+		months = len(v.report.Months)
+	}
+	periodURL := "/expenses?month=" + period.Month
+	if yearly {
+		periodURL = "/expenses/year?year=" + period.Month
+	} else if all {
+		periodURL = "/expenses/all"
+	}
+	filterPrefix := periodURL + "&"
+	if all {
+		filterPrefix = periodURL + "?"
+	}
 
 	s.render(w, "expense-period.html", expensePeriodData{
 		Base: store.Base, Period: period, Comparison: comparePeriods(previous, period),
 		Entries: entries, EntryTitle: entryTitle, Category: category, Subcategory: subcategory,
 		Categories: v.report.UsedCategories(), Breakdown: categoryBreakdowns(period),
 		IncomeBreakdown: period.IncomeCategories,
-		Bars:            bars, IsYear: yearly,
+		SalaryAverages:  salaryAverages(period, months),
+		PeriodURL:       periodURL, FilterPrefix: filterPrefix,
+		Bars: bars, IsYear: yearly, IsAll: all,
 		Notice: r.URL.Query().Get("msg"), Error: r.URL.Query().Get("err"),
 	})
+}
+
+func salaryAverages(period store.ExpenseMonth, months int) []salaryAverage {
+	if months == 0 {
+		return nil
+	}
+	averages := make([]salaryAverage, 0, len(period.IncomeSubcategories))
+	for _, subcategory := range period.IncomeSubcategories {
+		if salaryCategory(subcategory.Category) && strings.TrimSpace(subcategory.Subcategory) != "" {
+			averages = append(averages, salaryAverage{
+				Subcategory: subcategory.Subcategory,
+				Average:     subcategory.Total / money.Amount(months),
+			})
+		}
+	}
+	slices.SortFunc(averages, func(a, b salaryAverage) int { return cmp.Compare(b.Average, a.Average) })
+	return averages
 }
 
 func (s *Server) handleTransactions(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +362,9 @@ func (s *Server) handleSetExpenseCategory(w http.ResponseWriter, r *http.Request
 		values.Set("err", err.Error())
 	}
 	target := "/expenses"
+	if r.FormValue("scope") == "all" {
+		target = "/expenses/all"
+	}
 	if query := values.Encode(); query != "" {
 		target += "?" + query
 	}
@@ -331,6 +384,9 @@ func (s *Server) handleSetExpenseSubcategory(w http.ResponseWriter, r *http.Requ
 		values.Set("err", err.Error())
 	}
 	target := "/expenses"
+	if r.FormValue("scope") == "all" {
+		target = "/expenses/all"
+	}
 	if query := values.Encode(); query != "" {
 		target += "?" + query
 	}

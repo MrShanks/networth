@@ -3,18 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{if .IsYear}}Yearly{{else}}Monthly{{end}} Expenses</title>
+  <title>{{if .IsAll}}All-time{{else if .IsYear}}Yearly{{else}}Monthly{{end}} Expenses</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 {{template "navbar" "expenses"}}
 <header class="page-head">
-  <h1 class="sr-only">{{if .IsYear}}Yearly{{else}}Monthly{{end}} Expenses</h1>
+  <h1 class="sr-only">{{if .IsAll}}All-time{{else if .IsYear}}Yearly{{else}}Monthly{{end}} Expenses</h1>
   <div class="toolbar expense-view-toolbar">
     <nav class="segmented" aria-label="Expense period">
-      <a {{if not .IsYear}}class="current"{{end}} href="/expenses">Month</a>
+      <a {{if and (not .IsYear) (not .IsAll)}}class="current"{{end}} href="/expenses">Month</a>
       <a {{if .IsYear}}class="current"{{end}} href="/expenses/year">Year</a>
+      <a {{if .IsAll}}class="current"{{end}} href="/expenses/all">All time</a>
     </nav>
+    {{if not .IsAll}}
     <form class="month-picker" method="get" action="{{if .IsYear}}/expenses/year{{else}}/expenses{{end}}">
       <label><span>Viewing</span>
         {{if .IsYear}}
@@ -24,6 +26,7 @@
         {{end}}
       </label>
     </form>
+    {{end}}
   </div>
 </header>
 
@@ -33,11 +36,11 @@
 <div class="board" id="board">
 
 <section class="widget expense-summary" data-widget="period-summary" data-span="2">
-  {{template "widgethead" (printf "%s summary (%s)" (periodName .Period.Month .IsYear) .Base)}}
+  {{template "widgethead" (printf "%s summary (%s)" (periodName .Period.Month .IsYear .IsAll) .Base)}}
   <div class="widget-body">
     <div class="cards">
       <div class="card"><span class="label">Spending</span><strong class="value">{{.Period.Total}}</strong>{{if .Period.Refunds}}<span class="delta summary-detail up">after {{.Period.Refunds}} of refunds</span>{{else}}<span class="summary-detail"></span>{{end}}</div>
-      <div class="card"><span class="label">Salary</span><strong class="value up">{{.Period.Salary}}</strong><span class="summary-detail"></span></div>
+      <div class="card"><span class="label">Salary</span><strong class="value up">{{.Period.Salary}}</strong>{{if .SalaryAverages}}<div class="salary-averages">{{range .SalaryAverages}}<span><span>{{.Subcategory}} average</span><strong>{{.Average}}</strong></span>{{end}}</div>{{else}}<span class="summary-detail"></span>{{end}}</div>
       <div class="card"><span class="label">Other income</span><strong class="value up">{{subAmount .Period.Income .Period.Salary}}</strong><span class="summary-detail"></span></div>
       <div class="card"><span class="label">Taxes</span><strong class="value down">{{.Period.Taxes}}</strong><span class="summary-detail"></span></div>
       <div class="card">
@@ -49,11 +52,11 @@
   </div>
 </section>
 
-<section class="widget comparison" data-widget="period-comparison" data-span="2">
+{{if not .IsAll}}<section class="widget comparison" data-widget="period-comparison" data-span="2">
   {{template "widgethead" (printf "Compared with previous period (%s)" .Base)}}
   <div class="widget-body">
     <table class="comparison-summary">
-      <thead><tr><th></th><th class="num">{{periodName .Comparison.Left.Month .IsYear}}</th><th class="num">{{periodName .Comparison.Right.Month .IsYear}}</th><th class="num">Change</th></tr></thead>
+      <thead><tr><th></th><th class="num">{{periodName .Comparison.Left.Month .IsYear .IsAll}}</th><th class="num">{{periodName .Comparison.Right.Month .IsYear .IsAll}}</th><th class="num">Change</th></tr></thead>
       <tbody>
         <tr><td>Spending</td><td class="num">{{.Comparison.Left.Total}}</td><td class="num">{{.Comparison.Right.Total}}</td><td class="num">{{subAmount .Comparison.Right.Total .Comparison.Left.Total}}</td></tr>
         <tr><td>Salary</td><td class="num">{{.Comparison.Left.Salary}}</td><td class="num">{{.Comparison.Right.Salary}}</td><td class="num">{{subAmount .Comparison.Right.Salary .Comparison.Left.Salary}}</td></tr>
@@ -64,6 +67,7 @@
     </table>
   </div>
 </section>
+{{end}}
 
 {{if .IsYear}}
 <section class="widget" data-widget="year-months" data-span="2">
@@ -83,8 +87,8 @@
   {{template "widgethead" "Income by category"}}
   <div class="widget-body">
     {{if .IncomeBreakdown}}<table class="category-breakdown"><thead><tr><th>Category</th><th class="num">Total</th><th class="num">Share</th></tr></thead><tbody>
-      {{range .IncomeBreakdown}}<tr><td colspan="3"><div class="category-summary"><a class="category-link" href="{{if $.IsYear}}/expenses/year?year={{$.Period.Month}}{{else}}/expenses?month={{$.Period.Month}}{{end}}&amp;category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div></td></tr>{{end}}
-    </tbody></table>{{else}}<p class="empty">No income recorded for this {{if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
+      {{range .IncomeBreakdown}}<tr><td colspan="3"><div class="category-summary"><a class="category-link" href="{{$.FilterPrefix}}category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div></td></tr>{{end}}
+    </tbody></table>{{else}}<p class="empty">No income recorded for this {{if $.IsAll}}period{{else if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
   </div>
 </section>
 
@@ -92,20 +96,20 @@
   {{template "widgethead" "Spending by category"}}
   <div class="widget-body">
     {{if .Breakdown}}<table class="category-breakdown"><thead><tr><th>Category</th><th class="num">Total</th><th class="num">Share</th></tr></thead><tbody>
-      {{range .Breakdown}}{{$primary := .}}<tr><td colspan="3">{{if .Subcategories}}<details{{if eq $.Category .Category}} open{{end}}><summary><a class="category-link" href="{{if $.IsYear}}/expenses/year?year={{$.Period.Month}}{{else}}/expenses?month={{$.Period.Month}}{{end}}&amp;category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></summary>{{range .Subcategories}}<div class="subcategory-row"><a class="category-link" href="{{if $.IsYear}}/expenses/year?year={{$.Period.Month}}{{else}}/expenses?month={{$.Period.Month}}{{end}}&amp;category={{$primary.Category}}&amp;subcategory={{.Subcategory}}#entries">{{.Subcategory}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div>{{end}}</details>{{else}}<div class="category-summary"><a class="category-link" href="{{if $.IsYear}}/expenses/year?year={{$.Period.Month}}{{else}}/expenses?month={{$.Period.Month}}{{end}}&amp;category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div>{{end}}</td></tr>{{end}}
-    </tbody></table>{{else}}<p class="empty">Nothing recorded for this {{if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
+      {{range .Breakdown}}{{$primary := .}}<tr><td colspan="3">{{if .Subcategories}}<details{{if eq $.Category .Category}} open{{end}}><summary><a class="category-link" href="{{$.FilterPrefix}}category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></summary>{{range .Subcategories}}<div class="subcategory-row"><a class="category-link" href="{{$.FilterPrefix}}category={{$primary.Category}}&amp;subcategory={{.Subcategory}}#entries">{{.Subcategory}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div>{{end}}</details>{{else}}<div class="category-summary"><a class="category-link" href="{{$.FilterPrefix}}category={{.Category}}#entries">{{.Category}}</a><span class="num">{{.Total}}</span><span class="num">{{printf "%.0f" .Share}}%</span></div>{{end}}</td></tr>{{end}}
+    </tbody></table>{{else}}<p class="empty">Nothing recorded for this {{if .IsAll}}period{{else if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
   </div>
 </section>
 
 <section class="widget" id="entries" data-widget="entries" data-span="2">
   <header class="widget-head">
-    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.EntryTitle}}</span>{{with .Category}} <a class="clear-filter" href="{{if $.IsYear}}/expenses/year?year={{$.Period.Month}}{{else}}/expenses?month={{$.Period.Month}}{{end}}#entries">Clear</a>{{end}}</h2>
+    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.EntryTitle}}</span>{{with .Category}} <a class="clear-filter" href="{{$.PeriodURL}}#entries">Clear</a>{{end}}</h2>
     <div class="widget-tools">{{if and .Period.Expenses (not .Category) (not .IsYear)}}<form method="post" action="/expenses/month/{{.Period.Month}}/delete" onsubmit="return confirm('Delete all entries in this month?')"><button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button></form>{{end}}{{template "widgettools"}}</div>
   </header>
   <div class="widget-body">
     {{if .Entries}}<table class="entries-table" data-sortable-entries><thead><tr><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="date" data-sort-type="text">Date</button></th><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="category" data-sort-type="text">Category</button></th><th aria-sort="none"><button type="button" class="sort-heading" data-sort-column="note" data-sort-type="text">Note</button></th><th class="num" aria-sort="none"><button type="button" class="sort-heading" data-sort-column="amount" data-sort-type="number">Amount</button></th><th></th></tr></thead><tbody>
-      {{range .Entries}}{{$entry := .}}<tr data-entry-id="{{.ID}}"><td data-sort-value="{{.AsOf}}">{{.AsOf}}</td><td data-sort-value="{{.Category}}"><form class="entry-category-form" method="post" action="/expenses/{{.ID}}/category"><input type="hidden" name="month" value="{{if $.IsYear}}{{.Month}}{{else}}{{$.Period.Month}}{{end}}"><select class="pill entry-category {{if .IsIncome}}bought{{else if .IsTax}}liability{{else}}cur{{end}}" name="category" onchange="this.form.requestSubmit()">{{range $.Categories}}<option value="{{.}}"{{if eq . $entry.Category}} selected{{end}}>{{.}}</option>{{end}}</select></form><form class="entry-subcategory-form" method="post" action="/expenses/{{.ID}}/subcategory"><input type="hidden" name="month" value="{{if $.IsYear}}{{.Month}}{{else}}{{$.Period.Month}}{{end}}"><input class="pill entry-subcategory" name="subcategory" value="{{.Subcategory}}" placeholder="Add tag" maxlength="40" onchange="this.form.requestSubmit()"></form></td><td class="empty" data-sort-value="{{.Note}}">{{.Note}}</td><td class="num {{if .IsIncome}}up{{else}}down{{end}}" data-sort-value="{{if .IsIncome}}{{.Amount}}{{else}}-{{absAmount .Amount}}{{end}}">{{if .IsIncome}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}</td><td class="num"><form method="post" action="/expenses/{{.ID}}/delete"><button class="icon danger" type="submit" aria-label="Delete transaction" title="Delete transaction">&#128465;</button></form></td></tr>{{end}}
-    </tbody></table>{{else}}<p class="empty">No transactions recorded for this {{if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
+      {{range .Entries}}{{$entry := .}}<tr data-entry-id="{{.ID}}"><td data-sort-value="{{.AsOf}}">{{.AsOf}}</td><td data-sort-value="{{.Category}}"><form class="entry-category-form" method="post" action="/expenses/{{.ID}}/category">{{if $.IsAll}}<input type="hidden" name="scope" value="all">{{else}}<input type="hidden" name="month" value="{{if $.IsYear}}{{.Month}}{{else}}{{$.Period.Month}}{{end}}">{{end}}<select class="pill entry-category {{if .IsIncome}}bought{{else if .IsTax}}liability{{else}}cur{{end}}" name="category" onchange="this.form.requestSubmit()">{{range $.Categories}}<option value="{{.}}"{{if eq . $entry.Category}} selected{{end}}>{{.}}</option>{{end}}</select></form><form class="entry-subcategory-form" method="post" action="/expenses/{{.ID}}/subcategory">{{if $.IsAll}}<input type="hidden" name="scope" value="all">{{else}}<input type="hidden" name="month" value="{{if $.IsYear}}{{.Month}}{{else}}{{$.Period.Month}}{{end}}">{{end}}<input class="pill entry-subcategory" name="subcategory" value="{{.Subcategory}}" placeholder="Add tag" maxlength="40" onchange="this.form.requestSubmit()"></form></td><td class="empty" data-sort-value="{{.Note}}">{{.Note}}</td><td class="num {{if .IsIncome}}up{{else}}down{{end}}" data-sort-value="{{if .IsIncome}}{{.Amount}}{{else}}-{{absAmount .Amount}}{{end}}">{{if .IsIncome}}+{{else}}-{{end}}{{absAmount .Amount}} {{.Currency}}</td><td class="num"><form method="post" action="/expenses/{{.ID}}/delete"><button class="icon danger" type="submit" aria-label="Delete transaction" title="Delete transaction">&#128465;</button></form></td></tr>{{end}}
+    </tbody></table>{{else}}<p class="empty">No transactions recorded for this {{if .IsAll}}period{{else if .IsYear}}year{{else}}month{{end}}.</p>{{end}}
   </div>
 </section>
 

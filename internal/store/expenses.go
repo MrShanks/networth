@@ -305,38 +305,51 @@ type ExpenseReport struct {
 
 // Year returns the combined cash flow for one calendar year.
 func (r ExpenseReport) Year(year string) ExpenseMonth {
-	total := ExpenseMonth{Month: year}
+	months := make([]ExpenseMonth, 0, 12)
+	for _, month := range r.Months {
+		if strings.HasPrefix(month.Month, year) {
+			months = append(months, month)
+		}
+	}
+	return aggregateExpenseMonths(year, months)
+}
+
+// All returns the combined cash flow across every recorded month.
+func (r ExpenseReport) All() ExpenseMonth {
+	return aggregateExpenseMonths("All time", r.Months)
+}
+
+func aggregateExpenseMonths(label string, months []ExpenseMonth) ExpenseMonth {
+	total := ExpenseMonth{Month: label}
 	byCategory := make(map[string]money.Amount)
 	byIncomeCategory := make(map[string]money.Amount)
 	byIncomeSubcategory := make(map[string]map[string]money.Amount)
 	bySubcategory := make(map[string]map[string]money.Amount)
-	for _, month := range r.Months {
-		if strings.HasPrefix(month.Month, year) {
-			total.Total += month.Total
-			total.Refunds += month.Refunds
-			total.Income += month.Income
-			total.Salary += month.Salary
-			total.Taxes += month.Taxes
-			for _, category := range month.Categories {
-				byCategory[category.Category] += category.Total
-			}
-			for _, category := range month.IncomeCategories {
-				byIncomeCategory[category.Category] += category.Total
-			}
-			for _, subcategory := range month.IncomeSubcategories {
-				if byIncomeSubcategory[subcategory.Category] == nil {
-					byIncomeSubcategory[subcategory.Category] = make(map[string]money.Amount)
-				}
-				byIncomeSubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
-			}
-			for _, subcategory := range month.Subcategories {
-				if bySubcategory[subcategory.Category] == nil {
-					bySubcategory[subcategory.Category] = make(map[string]money.Amount)
-				}
-				bySubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
-			}
-			total.Expenses = append(total.Expenses, month.Expenses...)
+	for _, month := range months {
+		total.Total += month.Total
+		total.Refunds += month.Refunds
+		total.Income += month.Income
+		total.Salary += month.Salary
+		total.Taxes += month.Taxes
+		for _, category := range month.Categories {
+			byCategory[category.Category] += category.Total
 		}
+		for _, category := range month.IncomeCategories {
+			byIncomeCategory[category.Category] += category.Total
+		}
+		for _, subcategory := range month.IncomeSubcategories {
+			if byIncomeSubcategory[subcategory.Category] == nil {
+				byIncomeSubcategory[subcategory.Category] = make(map[string]money.Amount)
+			}
+			byIncomeSubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
+		}
+		for _, subcategory := range month.Subcategories {
+			if bySubcategory[subcategory.Category] == nil {
+				bySubcategory[subcategory.Category] = make(map[string]money.Amount)
+			}
+			bySubcategory[subcategory.Category][subcategory.Subcategory] += subcategory.Total
+		}
+		total.Expenses = append(total.Expenses, month.Expenses...)
 	}
 	for category, amount := range byCategory {
 		row := CategoryTotal{Category: category, Total: amount}

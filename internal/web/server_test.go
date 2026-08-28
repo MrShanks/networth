@@ -345,6 +345,43 @@ func TestExpenseSummarySeparatesSalaryAndOtherIncome(t *testing.T) {
 	}
 }
 
+func TestAllTimeExpensesAndSalaryAverages(t *testing.T) {
+	srv := newTestServer(t)
+	for _, entry := range []url.Values{
+		{"kind": {"expense"}, "amount": {"100"}, "currency": {"CHF"}, "new_category": {"Rent"}, "note": {"Old rent"}, "as_of": {"2025-12-01"}},
+		{"kind": {"income"}, "amount": {"5000"}, "currency": {"CHF"}, "new_category": {"Salary"}, "as_of": {"2025-12-20"}},
+		{"kind": {"expense"}, "amount": {"150"}, "currency": {"CHF"}, "new_category": {"Rent"}, "note": {"New rent"}, "as_of": {"2026-01-01"}},
+		{"kind": {"income"}, "amount": {"5200"}, "currency": {"CHF"}, "new_category": {"Salary"}, "as_of": {"2026-01-20"}},
+	} {
+		post(t, srv, "/expenses", entry)
+	}
+	entries, err := srv.store.Expenses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsIncome() {
+			if err := srv.store.SetExpenseSubcategory(t.Context(), entry.ID, "Primary job"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	page := get(t, srv, "/expenses/all")
+	for _, want := range []string{`<title>All-time Expenses</title>`, `class="current" href="/expenses/all">All time`, "All time summary (CHF)", "10,200.00", "Primary job average", "5,100.00", "Old rent", "New rent", `href="/expenses/all?category=Rent#entries"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("all-time expenses are missing %q", want)
+		}
+	}
+	if strings.Contains(page, `data-widget="period-comparison"`) || strings.Contains(page, `class="month-picker"`) {
+		t.Error("all-time expenses include period-specific controls")
+	}
+	filtered := get(t, srv, "/expenses/all?category=Rent")
+	if !strings.Contains(filtered, "Old rent") || !strings.Contains(filtered, "New rent") || !strings.Contains(filtered, `href="/expenses/all#entries">Clear`) {
+		t.Error("all-time category drill-down did not preserve its scope")
+	}
+}
+
 func TestExpenseIncomeByCategoryWidget(t *testing.T) {
 	srv := newTestServer(t)
 	for _, entry := range []url.Values{

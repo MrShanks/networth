@@ -108,6 +108,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/rates", s.handleRatesAPI)
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
 	s.mux.HandleFunc("GET /expenses/year", s.handleYearExpenses)
+	s.mux.HandleFunc("GET /expenses/all", s.handleAllExpenses)
 	s.mux.HandleFunc("GET /transactions", s.handleTransactions)
 	s.mux.HandleFunc("GET /graphs", s.handleGraphs)
 	s.mux.HandleFunc("POST /expenses", s.handleAddExpense)
