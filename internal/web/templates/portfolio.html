@@ -1,0 +1,214 @@
+{{define "portfolio.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{{template "navbar" "portfolio"}}
+<h1 class="sr-only">Portfolio</h1>
+
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
+
+<div class="board" id="board">
+
+  <section class="widget" data-widget="chart-funds" data-span="4">
+    {{template "widgethint" dict "Title" "Value vs invested" "Hint"
+      "Solid line: market value. Dashed line: money paid in. A step up means you bought more; the gap between the lines is your growth."}}
+    <div class="widget-body">
+      {{if .InvestChart.Empty}}
+        <p class="empty">Record a fund purchase to see your trend.</p>
+      {{else}}
+        {{template "linechart" .InvestChart}}
+      {{end}}
+    </div>
+  </section>
+
+  <section class="widget" data-widget="holdings" data-span="4">
+    <header class="widget-head">
+      <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">Holdings</span></h2>
+      <div class="widget-tools">
+        <button type="button" class="icon add-row" id="show-new-fund"
+                aria-label="Add fund" title="Add fund"
+                aria-expanded="false" aria-controls="new-fund-row">+</button>
+        {{template "widgettools"}}
+      </div>
+    </header>
+    <div class="widget-body accounts-table-wrap">
+      <form id="new-fund-row" class="inline-new-fund" method="post" action="/funds" hidden>
+        <select name="account_id" aria-label="Account holding the fund" required>
+          {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+        </select>
+        <input type="text" name="name" placeholder="Fund name" required maxlength="80" aria-label="Fund name">
+        <input type="text" name="ticker" placeholder="Ticker or ISIN" maxlength="12" aria-label="Ticker">
+        <select name="currency" aria-label="Currency">{{range .Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}</select>
+        <select name="class" aria-label="Asset class">{{range .AssetClasses}}<option value="{{.}}"{{if eq . "stocks"}} selected{{end}}>{{classLabel .}}</option>{{end}}</select>
+        <input type="text" name="units" inputmode="decimal" placeholder="Initial units" required aria-label="Initial units">
+        <input type="text" name="price" inputmode="decimal" placeholder="Price per unit" required aria-label="Price per unit">
+        <input type="date" name="as_of" value="{{.Today}}" required aria-label="Purchase date">
+        <span class="inline-actions">
+          <button type="submit" class="icon add-row" aria-label="Add fund" title="Add fund">+</button>
+          <button type="button" class="icon close-new-fund" aria-label="Cancel adding a fund" title="Cancel">&times;</button>
+        </span>
+      </form>
+
+      {{if .Now.Positions}}
+        {{range .Now.Accounts}}
+        {{if .Positions}}
+          <h3 class="holdings-account">{{.Name}}</h3>
+          <table class="holdings-table">
+            <thead>
+              <tr>
+                <th>Fund</th><th class="num">Units</th><th class="num">Price</th>
+                <th class="num">Avg cost</th><th class="num">Value</th><th class="num">Invested</th>
+                <th class="num">Gain</th><th>Trend</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+            {{range .Positions}}
+            {{$pos := .}}
+              <tr class="fund-row" data-fund="{{.ID}}">
+                <td>
+                  <button type="button" class="fund-name" data-fund-update="{{.ID}}"
+                          aria-expanded="false" aria-controls="fund-update-{{.ID}}"
+                          aria-label="Update {{.Name}}" title="Record a price or a trade">{{.Name}}</button>
+                  {{with .Ticker}}<span class="pill etf">{{.}}</span>{{end}}
+                  <span class="pill cur">{{.Currency}}</span>
+                  <form class="pill-form" method="post" action="/funds/{{.ID}}/class">
+                    <select name="class" class="pill class-{{.AssetClass}}" onchange="this.form.requestSubmit()"
+                            title="How this fund is counted in asset allocation">
+                      {{range $.AssetClasses}}<option value="{{.}}"{{if eq . $pos.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}
+                    </select>
+                  </form>
+                  <div class="empty small">as of {{.AsOf}}</div>
+                </td>
+                <td class="num">{{printf "%.4g" .Units}}</td>
+                <td class="num">{{.Price}}</td>
+                <td class="num">{{.AvgCost}}</td>
+                <td class="num">
+                  {{.Value}}
+                  {{if ne .Currency $.Base}}<div class="empty small">{{.ValueBase}} {{$.Base}}</div>{{end}}
+                </td>
+                <td class="num">{{.Invested}}</td>
+                <td class="num {{if lt .Gain 0}}down{{else}}up{{end}}">
+                  {{if ge .Gain 0}}+{{end}}{{.Gain}}
+                  <div class="small">{{printf "%+.1f" .GainPct}}%</div>
+                </td>
+                <td>
+                  {{with spark .History}}
+                    <svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline points="{{.}}"/>
+                    </svg>
+                  {{else}}<span class="empty small">one entry</span>{{end}}
+                </td>
+                <td class="num">
+                  <span class="inline-actions">
+                    <form method="post" action="/funds/{{.ID}}/prices/fetch">
+                      <button class="icon" type="submit" aria-label="Fetch price history for {{.Name}}"
+                              title="Fetch the daily price history from the day you first bought it">&#8635;</button>
+                    </form>
+                    <form method="post" action="/funds/{{.ID}}/delete"
+                          onsubmit="return confirm('Delete {{.Name}} and its history?')">
+                      <button class="icon danger" type="submit" aria-label="Delete fund" title="Delete fund">&#128465;</button>
+                    </form>
+                  </span>
+                </td>
+              </tr>
+              <tr class="fund-update-row" id="fund-update-{{.ID}}" hidden>
+                <td colspan="9">
+                  <form method="post" action="/fund-updates" class="inline-fund-update">
+                    <input type="hidden" name="fund_id" value="{{.ID}}">
+                    <input type="text" name="price" inputmode="decimal" value="{{.Price}}" required
+                           aria-label="Price for {{.Name}} in {{.Currency}}" title="Price in {{.Currency}}">
+                    <input type="text" name="units" inputmode="decimal" placeholder="Units traded"
+                           aria-label="Units traded for {{.Name}}; positive to buy, negative to sell"
+                           title="Optional; positive to buy, negative to sell">
+                    <input type="date" name="as_of" value="{{$.Today}}" required aria-label="Update date for {{.Name}}">
+                    <span class="inline-actions">
+                      <button type="submit">Save</button>
+                      <button type="button" class="icon close-fund-update" aria-label="Cancel fund update" title="Cancel">&times;</button>
+                    </span>
+                  </form>
+                </td>
+              </tr>
+            {{end}}
+            </tbody>
+          </table>
+        {{end}}
+        {{end}}
+      {{else}}
+        <p class="empty">No funds yet — add one, or import a broker export below.</p>
+      {{end}}
+    </div>
+  </section>
+
+  <section class="widget" data-widget="import-trades" data-span="2">
+    {{template "widgethint" dict "Title" "Import trades" "Hint"
+      "Your broker's transactions export. Each instrument becomes a fund of the chosen account and each line a trade, so the whole history is rebuilt. Importing the same file twice adds nothing."}}
+    <div class="widget-body">
+      {{if .Accounts}}
+        <form method="post" action="/trades/import" enctype="multipart/form-data" class="stack">
+          <label>Account
+            <select name="account_id" required aria-label="Account to import into">
+              {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+            </select>
+          </label>
+          <label>Broker CSV
+            <input type="file" name="file" accept=".csv,text/csv" multiple required aria-label="Broker CSV">
+          </label>
+          <button type="submit">Import trades</button>
+        </form>
+      {{else}}
+        <p class="empty">Create an account on the overview first.</p>
+      {{end}}
+    </div>
+  </section>
+
+</div>
+
+<script src="/static/board.js"></script>
+<script src="/static/scroll.js"></script>
+<script>
+  document.querySelector('.accounts-table-wrap')?.addEventListener('click', (event) => {
+    const update = event.target.closest('[data-fund-update]');
+    if (update) {
+      const row = document.getElementById(`fund-update-${update.dataset.fundUpdate}`);
+      row.hidden = !row.hidden;
+      update.setAttribute('aria-expanded', String(!row.hidden));
+      if (!row.hidden) row.querySelector('[name="price"]').focus();
+      window.dispatchEvent(new Event('resize'));
+    }
+
+    const close = event.target.closest('.close-fund-update');
+    if (close) {
+      const row = close.closest('.fund-update-row');
+      row.hidden = true;
+      const trigger = document.querySelector(`[aria-controls="${row.id}"]`);
+      trigger?.setAttribute('aria-expanded', 'false');
+      trigger?.focus();
+      window.dispatchEvent(new Event('resize'));
+    }
+  });
+
+  const newFundTrigger = document.getElementById('show-new-fund');
+  const newFundForm = document.getElementById('new-fund-row');
+  newFundTrigger?.addEventListener('click', () => {
+    newFundForm.hidden = !newFundForm.hidden;
+    newFundTrigger.setAttribute('aria-expanded', String(!newFundForm.hidden));
+    if (!newFundForm.hidden) newFundForm.querySelector('[name="name"]').focus();
+    window.dispatchEvent(new Event('resize'));
+  });
+  newFundForm?.querySelector('.close-new-fund')?.addEventListener('click', () => {
+    newFundForm.reset();
+    newFundForm.hidden = true;
+    newFundTrigger.setAttribute('aria-expanded', 'false');
+    newFundTrigger.focus();
+    window.dispatchEvent(new Event('resize'));
+  });
+</script>
+</body>
+</html>
+{{end}}

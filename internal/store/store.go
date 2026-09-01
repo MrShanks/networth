@@ -80,6 +80,7 @@ type Fund struct {
 	AccountName string
 	Name        string
 	Ticker      string
+	Symbol      string // the listing its prices are fetched from
 	Currency    string
 	AssetClass  string
 }
@@ -166,6 +167,8 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"category_rules", "subcategory", "ALTER TABLE category_rules ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''"},
 	{"expenses", "account_ref", "ALTER TABLE expenses ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''"},
 	{"accounts", "bank_ref", "ALTER TABLE accounts ADD COLUMN bank_ref TEXT NOT NULL DEFAULT ''"},
+	{"funds", "symbol", "ALTER TABLE funds ADD COLUMN symbol TEXT NOT NULL DEFAULT ''"},
+	{"prices", "source", "ALTER TABLE prices ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
 }
 
 func Open(dsn string) (*Store, error) {
@@ -221,6 +224,11 @@ func migrate(db *sql.DB) error {
 	}
 	if err := migrateSnapshotsToTrades(db); err != nil {
 		return err
+	}
+	if _, err := db.Exec(`
+		INSERT INTO settings (key, value) VALUES ('net_worth_baseline', date('now'))
+		ON CONFLICT(key) DO NOTHING`); err != nil {
+		return fmt.Errorf("set net worth baseline: %w", err)
 	}
 	return adoptBase(db)
 }

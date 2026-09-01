@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/MrShanks/networth/internal/fx"
+	"github.com/MrShanks/networth/internal/prices"
 	"github.com/MrShanks/networth/internal/store"
 )
 
@@ -33,7 +34,19 @@ func newTestServer(t *testing.T) *Server {
 	}))
 	t.Cleanup(rates.Close)
 
+	quotes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "search") {
+			io.WriteString(w, `{"quotes":[{"symbol":"TEST.L"}]}`)
+			return
+		}
+		io.WriteString(w, `{"chart":{"result":[{"meta":{"currency":"USD","symbol":"TEST.L","gmtoffset":0},
+			"timestamp":[1735862400,1735948800],
+			"indicators":{"quote":[{"close":[200.5,201.5]}]}}]}}`)
+	}))
+	t.Cleanup(quotes.Close)
+
 	srv, err := NewServer(db, fx.NewClient(rates.URL, store.Base, store.Foreign()),
+		prices.NewClient(quotes.URL+"/search", quotes.URL+"/chart/"),
 		slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -800,7 +813,6 @@ func TestAccountsRenderInOneTableWithInlineAddRow(t *testing.T) {
 		`form="new-account-form" name="name"`,
 		`form="new-account-form" name="bank_ref"`,
 		`action="/accounts/1/bank-ref"`,
-		`id="account-funds-1" hidden`, `id="account-funds-2" hidden`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
@@ -812,12 +824,8 @@ func TestAccountsRenderInOneTableWithInlineAddRow(t *testing.T) {
 	if strings.Index(body, `id="new-account-row"`) > strings.Index(body, `data-account="1"`) {
 		t.Error("new account row is not at the top of the accounts table")
 	}
-	for _, id := range []string{"1", "2"} {
-		start := strings.Index(body, `data-account="`+id+`"`)
-		accountRow := body[start : start+strings.Index(body[start:], "</tr>")]
-		if strings.Contains(accountRow, `data-account-funds-toggle=`) {
-			t.Errorf("empty account %s renders a fund disclosure toggle", id)
-		}
+	if strings.Contains(body, `data-fund=`) {
+		t.Error("fund holdings still render on the dashboard; they belong on /portfolio")
 	}
 	if strings.Contains(body, `>Record balance</button>`) {
 		t.Error("dashboard still renders the redundant Record balance button")
@@ -863,26 +871,24 @@ func TestAccountCanBeCreatedWithOpeningBalance(t *testing.T) {
 func TestFundsCanBeUpdatedInline(t *testing.T) {
 	srv := newTestServer(t)
 	seed(t, srv)
-	body := get(t, srv, "/")
+	body := get(t, srv, "/portfolio")
 
 	for _, want := range []string{
 		`class="fund-name" data-fund-update="1"`,
 		`class="fund-update-row" id="fund-update-1" hidden`,
 		`action="/fund-updates" class="inline-fund-update"`,
 		`name="fund_id" value="1"`,
-		`action="/funds" class="inline-new-fund"`,
-		`class="new-fund-row" id="new-fund-1" hidden`,
-		`data-new-fund-account="1"`,
-		`data-account-funds-toggle="1"`,
-		`aria-controls="account-funds-1"`,
+		`id="new-fund-row" class="inline-new-fund" method="post" action="/funds"`,
+		`id="show-new-fund"`,
 		`class="icon close-new-fund"`,
+		`action="/trades/import"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("dashboard missing %q", want)
+			t.Errorf("portfolio page missing %q", want)
 		}
 	}
-	if strings.Contains(body, "<h3>Update a fund</h3>") {
-		t.Error("fund updates are still duplicated in the modal")
+	if !strings.HasSuffix(strings.TrimSpace(body), "</html>") {
+		t.Error("portfolio page was truncated")
 	}
 }
 
@@ -894,7 +900,7 @@ func TestFundCanBeCreatedInlineWithInitialHolding(t *testing.T) {
 		"class": {"stocks"}, "units": {"10"}, "price": {"87.40"}, "as_of": {"2026-08-26"},
 	})
 
-	body := get(t, srv, "/")
+	body := get(t, srv, "/portfolio")
 	for _, want := range []string{"World ETF", "VWCE", "87.40", "874.00", `data-fund-update="1"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("new fund is missing %q", want)
@@ -907,7 +913,7 @@ func TestChartsAreNeverEmptyLines(t *testing.T) {
 	seed(t, srv)
 
 	// A single point would draw an invisible polyline; every chart needs two.
-	for _, path := range []string{"/", "/retire"} {
+	for _, path := range []string{"/", "/portfolio", "/retire"} {
 		for _, line := range chartLines(get(t, srv, path)) {
 			if strings.Count(line, ",") < 2 {
 				t.Errorf("%s has a polyline with fewer than two points: %q", path, line)
@@ -1193,30 +1199,17 @@ func TestResetDashboardChangeUntilNextEntry(t *testing.T) {
 	}
 }
 
-func TestDashboardResetWindowsChartHistories(t *testing.T) {
-	netWorth := []store.Point{
-		{Date: "2026-01-01"},
-		{Date: "2026-02-01"},
-		{Date: "2026-03-01"},
-	}
-	if got := historySince(netWorth, "2026-03-01"); len(got) != 1 || got[0].Date != "2026-03-01" {
-		t.Errorf("historySince reset = %+v, want only current point", got)
-	}
+func TestDashboardResetKeepsTheWholeChartHistory(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{"name": {"UBS"}, "kind": {"asset"}, "currency": {"CHF"}})
+	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
+	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"150"}, "as_of": {"2026-02-01"}})
+	post(t, srv, "/dashboard/change/reset", nil)
 
-	funds := []store.ValuePoint{
-		{AsOf: "2026-01-01"},
-		{AsOf: "2026-02-01"},
-		{AsOf: "2026-03-01"},
-	}
-	if got := investHistorySince(funds, "2026-03-01"); len(got) != 1 || got[0].AsOf != "2026-03-01" {
-		t.Errorf("investHistorySince reset = %+v, want only current point", got)
-	}
-
-	if got := historySince(netWorth, "2026-02-01"); len(got) != 2 {
-		t.Errorf("historySince newer entry has %d points, want reset point plus newer point", len(got))
-	}
-	if got := investHistorySince(funds, "2026-02-01"); len(got) != 2 {
-		t.Errorf("investHistorySince newer entry has %d points, want reset point plus newer point", len(got))
+	// Dismissing the change badge must not cut the trend down to one point.
+	page := get(t, srv, "/")
+	if !strings.Contains(page, "2026-01-01") {
+		t.Error("the chart lost the history before the dismissed change")
 	}
 }
 
@@ -1449,5 +1442,141 @@ func TestBadInputRedirectsWithMessage(t *testing.T) {
 	}
 	if location := rec.Header().Get("Location"); !strings.Contains(location, "err=") {
 		t.Errorf("Location = %q, want an error message", location)
+	}
+}
+
+const degiroExport = `Data,Ora,Prodotto,ISIN,Borsa di riferimento,Borsa,Quantità,Quotazione,,Valore locale,,Valore CHF,Tasso di cambio,Commissione AutoFX,Costi di transazione e/o di terze parti CHF,Totale CHF,ID Ordine
+03-01-2025,09:00,ISHARES CORE MSCI WORLD UCITS ETF USD (ACC),IE00B4L5Y983,SWX,XSWX,20,107.8600,USD,-2157.20,USD,-1963.54,1.0986,-4.91,-2.81,-1971.26,75e46ce3
+28-07-2026,09:38,AMUNDI CORE STOXX EUROPE 600 UCITS ETF A,LU0908500753,TDG,XGAT,10,317.8000,EUR,-3178.00,EUR,-2961.28,1.0732,-7.40,-0.93,-2969.61,99da5abc
+`
+
+// uploadTrades posts a broker export to an account the way its form does.
+func uploadTrades(t *testing.T, srv *Server, accountID int64, csv string) string {
+	t.Helper()
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	form.WriteField("account_id", fmt.Sprint(accountID))
+	part, err := form.CreateFormFile("file", "Transactions.csv")
+	if err != nil {
+		t.Fatalf("build upload: %v", err)
+	}
+	io.WriteString(part, csv)
+	form.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/trades/import", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("import returned %d, want 303", rec.Code)
+	}
+	return rec.Header().Get("Location")
+}
+
+func TestImportingABrokerExportRebuildsAnAccountsFunds(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"stocks"},
+	})
+	ledger, err := srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID := ledger.Accounts[0].ID
+
+	if location := uploadTrades(t, srv, accountID, degiroExport); !strings.Contains(location, "Imported+2+trades") {
+		t.Errorf("Location = %q, want a two-trade notice", location)
+	}
+	if location := uploadTrades(t, srv, accountID, degiroExport); !strings.Contains(location, "already+recorded") {
+		t.Errorf("re-import Location = %q, want the duplicates to be reported", location)
+	}
+
+	page := get(t, srv, "/portfolio")
+	for _, want := range []string{"ISHARES CORE MSCI WORLD UCITS ETF USD (ACC)", "IE00B4L5Y983", "AMUNDI CORE STOXX EUROPE 600 UCITS ETF A"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("portfolio page does not show %q", want)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(page), "</html>") {
+		t.Error("dashboard was truncated")
+	}
+}
+
+func TestFetchingAFundsPriceHistoryFillsInTheChart(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"stocks"},
+	})
+	ledger, err := srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadTrades(t, srv, ledger.Accounts[0].ID, degiroExport)
+
+	ledger, err = srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var world store.Fund
+	for _, fund := range ledger.Funds {
+		if fund.Currency == "USD" {
+			world = fund
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/funds/%d/prices/fetch", world.ID), nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("fetch returned %d, want 303", rec.Code)
+	}
+	// The export already holds a trade on the first of the two stubbed days, and
+	// a trade's own price is never overwritten by a fetch.
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "1+daily+price+from+TEST.L") {
+		t.Errorf("Location = %q, want the fetched prices to be reported", location)
+	}
+
+	ledger, err = srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fund := range ledger.Funds {
+		if fund.ID == world.ID && fund.Symbol != "TEST.L" {
+			t.Errorf("fund symbol = %q, want TEST.L", fund.Symbol)
+		}
+	}
+	// Fetched marks are history, not activity: they must not flood the list.
+	for _, entry := range ledger.Entries(50) {
+		if entry.Kind == "price" {
+			t.Errorf("fetched price shows up as an entry: %+v", entry)
+		}
+	}
+	if page := get(t, srv, "/"); !strings.HasSuffix(strings.TrimSpace(page), "</html>") {
+		t.Error("dashboard was truncated")
+	}
+}
+
+func TestFetchingPricesReportsACurrencyMismatch(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}})
+	ledger, err := srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	post(t, srv, "/funds", url.Values{
+		"account_id": {fmt.Sprint(ledger.Accounts[0].ID)}, "name": {"Euro fund"},
+		"ticker": {"LU0908500753"}, "currency": {"EUR"},
+	})
+	ledger, err = srv.store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/funds/%d/prices/fetch", ledger.Funds[0].ID), nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "err=") {
+		t.Errorf("Location = %q, want an error about the missing EUR listing", location)
 	}
 }

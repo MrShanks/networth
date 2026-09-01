@@ -87,7 +87,7 @@ func (l *Ledger) Entries(limit int) []Entry {
 			})
 		}
 		for _, m := range l.prices[f.ID] {
-			if impliedBy(l.trades[f.ID], m) {
+			if m.Source == SourceFetched || impliedBy(l.trades[f.ID], m) {
 				continue
 			}
 			out = append(out, Entry{

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MrShanks/networth/internal/fx"
+	"github.com/MrShanks/networth/internal/prices"
 	"github.com/MrShanks/networth/internal/store"
 	"github.com/MrShanks/networth/internal/web"
 )
@@ -36,7 +37,8 @@ func run(addr, dbPath string, log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	handler, err := web.NewServer(db, fx.NewClient(fx.DefaultEndpoint, store.Base, store.Foreign()), log)
+	handler, err := web.NewServer(db, fx.NewClient(fx.DefaultEndpoint, store.Base, store.Foreign()),
+		prices.NewClient(prices.DefaultSearchEndpoint, prices.DefaultChartEndpoint), log)
 	if err != nil {
 		return err
 	}

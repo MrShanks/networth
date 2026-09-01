@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"slices"
 	"sort"
@@ -22,9 +24,10 @@ func (t Trade) Cost() money.Amount { return value(math.Abs(t.Units), t.Price) }
 
 // PriceMark is what one unit of a fund was worth on a date.
 type PriceMark struct {
-	ID    int64
-	AsOf  string
-	Price money.Amount
+	ID     int64
+	AsOf   string
+	Price  money.Amount
+	Source string // "fetched" for a whole history pulled from the price service
 }
 
 // ValuePoint tracks a holding's worth against the money put into it.
@@ -43,8 +46,9 @@ type CashPoint struct {
 
 // Ledger is the whole database in memory; valuations are derived from it.
 type Ledger struct {
-	Accounts []Account
-	Funds    []Fund
+	Accounts         []Account
+	Funds            []Fund
+	NetWorthBaseline string
 
 	// Rates is how many CHF one unit of each currency buys, applied to every
 	// date: holdings are always shown at the current exchange rate.
@@ -79,12 +83,12 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 	}
 
 	if err := query(ctx, s.db, `
-        SELECT f.id, f.account_id, a.name, f.name, f.ticker, f.currency, f.asset_class
+        SELECT f.id, f.account_id, a.name, f.name, f.ticker, f.symbol, f.currency, f.asset_class
         FROM funds f JOIN accounts a ON a.id = f.account_id
         ORDER BY a.name, f.name`,
 		func(scan scanner) error {
 			var f Fund
-			if err := scan(&f.ID, &f.AccountID, &f.AccountName, &f.Name, &f.Ticker, &f.Currency, &f.AssetClass); err != nil {
+			if err := scan(&f.ID, &f.AccountID, &f.AccountName, &f.Name, &f.Ticker, &f.Symbol, &f.Currency, &f.AssetClass); err != nil {
 				return err
 			}
 			l.Funds = append(l.Funds, f)
@@ -129,20 +133,25 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 	}
 
 	if err := query(ctx, s.db, `
-        SELECT id, fund_id, as_of, price_cents FROM prices ORDER BY as_of, id`,
+        SELECT id, fund_id, as_of, price_cents, source FROM prices ORDER BY as_of, id`,
 		func(scan scanner) error {
 			var (
 				fundID int64
 				m      PriceMark
 				price  int64
 			)
-			if err := scan(&m.ID, &fundID, &m.AsOf, &price); err != nil {
+			if err := scan(&m.ID, &fundID, &m.AsOf, &price, &m.Source); err != nil {
 				return err
 			}
 			m.Price = money.Amount(price)
 			l.prices[fundID] = append(l.prices[fundID], m)
 			return nil
 		}); err != nil {
+		return nil, err
+	}
+
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM settings WHERE key = 'net_worth_baseline'`).Scan(&l.NetWorthBaseline); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
@@ -370,6 +379,43 @@ func (l *Ledger) History() []Point {
 	for _, d := range dates {
 		v := l.At(d)
 		out = append(out, Point{Date: d, Assets: v.Assets, Liabilities: v.Liabilities})
+	}
+	return out
+}
+
+// NetWorthHistory treats balances at the baseline as already owned, while
+// retaining the real historical value of investment positions.
+func (l *Ledger) NetWorthHistory() []Point {
+	dates := l.dates()
+	if len(dates) == 0 || l.NetWorthBaseline == "" {
+		return l.History()
+	}
+	if l.NetWorthBaseline >= dates[0] && l.NetWorthBaseline <= today() {
+		dates = append(dates, l.NetWorthBaseline)
+		sort.Strings(dates)
+		dates = slices.Compact(dates)
+	}
+
+	baseline := l.At(l.NetWorthBaseline)
+	baselineCash := make(map[int64]money.Amount, len(baseline.Accounts))
+	for _, account := range baseline.Accounts {
+		baselineCash[account.ID] = account.CashBase
+	}
+
+	out := make([]Point, 0, len(dates))
+	for _, date := range dates {
+		valuation := l.At(date)
+		if date < l.NetWorthBaseline {
+			for _, account := range valuation.Accounts {
+				difference := baselineCash[account.ID] - account.CashBase
+				if account.IsLiability() {
+					valuation.Liabilities += difference
+				} else {
+					valuation.Assets += difference
+				}
+			}
+		}
+		out = append(out, Point{Date: date, Assets: valuation.Assets, Liabilities: valuation.Liabilities})
 	}
 	return out
 }

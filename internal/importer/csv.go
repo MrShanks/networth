@@ -55,24 +55,9 @@ var errNoHeader = errors.New("the file has no header row")
 // Parse reads a bank export. Spending, refunds and income are all kept, so a
 // month can show what went out, what came back and what was left over.
 func Parse(r io.Reader, opts Options) (Result, error) {
-	buf, err := io.ReadAll(io.LimitReader(r, 8<<20))
+	records, err := readRecords(r)
 	if err != nil {
 		return Result{}, err
-	}
-	text := strings.TrimPrefix(string(buf), "\ufeff")
-
-	reader := csv.NewReader(strings.NewReader(text))
-	reader.Comma = delimiter(text)
-	reader.FieldsPerRecord = -1
-	reader.LazyQuotes = true
-	reader.TrimLeadingSpace = true
-
-	records, err := reader.ReadAll()
-	if err != nil {
-		return Result{}, fmt.Errorf("read csv: %w", err)
-	}
-	if len(records) == 0 {
-		return Result{}, errNoHeader
 	}
 
 	columns, err := header(records[0])
@@ -98,6 +83,31 @@ func Parse(r io.Reader, opts Options) (Result, error) {
 // columns holds where each field we need sits in a record.
 type columns struct {
 	date, accountRef, description, kind, amount, currency, category int
+}
+
+// readRecords reads a whole CSV, guessing its delimiter, and refuses a file
+// without a header row.
+func readRecords(r io.Reader) ([][]string, error) {
+	buf, err := io.ReadAll(io.LimitReader(r, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	text := strings.TrimPrefix(string(buf), "\ufeff")
+
+	reader := csv.NewReader(strings.NewReader(text))
+	reader.Comma = delimiter(text)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("read csv: %w", err)
+	}
+	if len(records) == 0 {
+		return nil, errNoHeader
+	}
+	return records, nil
 }
 
 func header(record []string) (columns, error) {
@@ -207,7 +217,7 @@ func delimiter(text string) rune {
 }
 
 func parseDate(raw string) (string, error) {
-	for _, layout := range []string{"02.01.2006", "2006-01-02", "02/01/2006", "01/02/2006"} {
+	for _, layout := range []string{"02.01.2006", "2006-01-02", "02/01/2006", "01/02/2006", "02-01-2006"} {
 		if t, err := time.Parse(layout, raw); err == nil {
 			return t.Format("2006-01-02"), nil
 		}

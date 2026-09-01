@@ -1,32 +1,170 @@
 // Widget board: reorder, collapse, and choose a standard width. The layout is
 // remembered per browser, separately for each page.
-(function () {
+(async function () {
+  const pages = {
+    overview: { label: 'Overview', path: '/' },
+    portfolio: { label: 'Portfolio', path: '/portfolio' },
+    expenses: { label: 'Expenses', path: '/expenses' },
+    transactions: { label: 'Transactions', path: '/transactions' },
+    graphs: { label: 'Graphs', path: '/graphs' },
+    records: { label: 'Records', path: '/records' },
+    retirement: { label: 'Retirement', path: '/retire' },
+  };
+  const pageOf = (path) => path.startsWith('/expenses') ? 'expenses'
+    : path === '/' ? 'overview'
+      : path === '/retire' ? 'retirement'
+        : path.slice(1);
+  const page = pageOf(location.pathname);
+  const placementsKey = 'networth.widget.placements';
   const KEY = 'networth.board.' + location.pathname;
   const board = document.getElementById('board');
   if (!board) return;
 
-  const widgets = () => [...board.querySelectorAll('.widget')];
-  const idOf = (el) => el.dataset.widget;
-
-  function load() {
+  function loadPlacements() {
     try {
-      return JSON.parse(localStorage.getItem(KEY)) || {};
+      return JSON.parse(localStorage.getItem(placementsKey)) || {};
     } catch (e) {
       return {};
     }
   }
 
+  function widgetSettings(widget) {
+    const title = widget.querySelector('[data-widget-title]');
+    return {
+      collapsed: widget.classList.contains('collapsed'),
+      span: Number(widget.dataset.span) || 1,
+      title: title?.textContent.trim() || title?.dataset.defaultTitle || '',
+    };
+  }
+
+  const placements = loadPlacements();
+  [...board.querySelectorAll('.widget')].forEach((widget) => {
+    widget.dataset.widgetKey = `${page}::${widget.dataset.widget}`;
+    widget.dataset.widgetHome = page;
+    widget.dataset.widgetSource = location.pathname;
+    const placement = placements[widget.dataset.widgetKey];
+    if (placement && placement.destination !== page) widget.remove();
+  });
+
+  const sourceDocuments = [];
+  const incoming = Object.entries(placements)
+    .filter(([, placement]) => placement.destination === page);
+  for (const [key, placement] of incoming) {
+    if (board.querySelector(`[data-widget-key="${CSS.escape(key)}"]`)) continue;
+    try {
+      const response = await fetch(placement.source, { headers: { Accept: 'text/html' } });
+      if (!response.ok) continue;
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const original = [...doc.querySelectorAll('#board > .widget')]
+        .find((widget) => widget.dataset.widget === placement.widget);
+      if (!original) continue;
+      const widget = document.importNode(original, true);
+      widget.dataset.widgetKey = key;
+      widget.dataset.widgetHome = placement.home;
+      widget.dataset.widgetSource = placement.source;
+      if (placement.settings?.collapsed) widget.classList.add('collapsed');
+      if ([1, 2, 4].includes(placement.settings?.span)) {
+        widget.dataset.span = placement.settings.span;
+      }
+      const title = widget.querySelector('[data-widget-title]');
+      if (title && placement.settings?.title) title.textContent = placement.settings.title;
+      board.appendChild(widget);
+      sourceDocuments.push(doc);
+    } catch (e) {
+      // Leave an unavailable widget at home rather than breaking this page.
+    }
+  }
+
+  async function activateSourceScripts(doc) {
+    for (const script of doc.querySelectorAll('body script')) {
+      if (script.src) {
+        const src = new URL(script.src, location.origin).pathname;
+        if (src.endsWith('/board.js') || src.endsWith('/scroll.js')
+            || document.querySelector(`script[src="${CSS.escape(src)}"]`)) continue;
+        await new Promise((resolve) => {
+          const loaded = document.createElement('script');
+          loaded.src = src;
+          loaded.onload = resolve;
+          loaded.onerror = resolve;
+          document.body.appendChild(loaded);
+        });
+      } else if (script.textContent.trim()) {
+        Function(script.textContent)();
+      }
+    }
+  }
+  for (const doc of sourceDocuments) await activateSourceScripts(doc);
+
+  const widgets = () => [...board.querySelectorAll('.widget')];
+  const idOf = (el) => el.dataset.widgetKey || el.dataset.widget;
+
+  function load() {
+    try {
+      const state = JSON.parse(localStorage.getItem(KEY)) || {};
+      if (state.widgetKeys) return state;
+      const localIDs = new Set([...board.querySelectorAll('[data-widget-home]')]
+        .filter((widget) => widget.dataset.widgetHome === page)
+        .map((widget) => widget.dataset.widget));
+      const key = (id) => localIDs.has(id) ? `${page}::${id}` : id;
+      state.order = (state.order || []).map(key);
+      state.collapsed = (state.collapsed || []).map(key);
+      for (const property of ['spans', 'columns', 'titles']) {
+        state[property] = Object.fromEntries(Object.entries(state[property] || {})
+          .map(([id, value]) => [key(id), value]));
+      }
+      state.widgetKeys = true;
+      localStorage.setItem(KEY, JSON.stringify(state));
+      return state;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // The saved order also holds widgets the page isn't showing right now (a
+  // chart with no data yet, say), so they come back where they were left.
+  let remembered = [];
+
+  function mergedOrder() {
+    const present = new Set(widgets().map(idOf));
+    const order = widgets().map(idOf);
+    let anchor = null;
+    for (const id of remembered) {
+      if (present.has(id)) {
+        anchor = id;
+        continue;
+      }
+      order.splice(anchor === null ? 0 : order.indexOf(anchor) + 1, 0, id);
+      anchor = id;
+    }
+    return order;
+  }
+
+  // keptFor carries over what was saved for widgets this page is not showing.
+  function keptFor(previous, current, present) {
+    const merged = { ...current };
+    Object.entries(previous || {}).forEach(([id, value]) => {
+      if (!present.has(id)) merged[id] = value;
+    });
+    return merged;
+  }
+
   function save() {
+    const previous = load();
+    const present = new Set(widgets().map(idOf));
+    remembered = mergedOrder();
     const state = {
-      order: widgets().map(idOf),
-      collapsed: widgets().filter((w) => w.classList.contains('collapsed')).map(idOf),
-      spans: Object.fromEntries(widgets().map((w) => [idOf(w), Number(w.dataset.span) || 1])),
-      columns: Object.fromEntries(widgets().filter((w) => w.dataset.column)
-        .map((w) => [idOf(w), Number(w.dataset.column)])),
-      titles: Object.fromEntries(widgets().map((w) => {
+      order: remembered,
+      collapsed: [...(previous.collapsed || []).filter((id) => !present.has(id)),
+        ...widgets().filter((w) => w.classList.contains('collapsed')).map(idOf)],
+      spans: keptFor(previous.spans, Object.fromEntries(
+        widgets().map((w) => [idOf(w), Number(w.dataset.span) || 1])), present),
+      columns: keptFor(previous.columns, Object.fromEntries(
+        widgets().filter((w) => w.dataset.column).map((w) => [idOf(w), Number(w.dataset.column)])), present),
+      titles: keptFor(previous.titles, Object.fromEntries(widgets().map((w) => {
         const title = w.querySelector('[data-widget-title]');
         return [idOf(w), title?.textContent.trim() || title?.dataset.defaultTitle || ''];
-      })),
+      })), present),
+      widgetKeys: true,
     };
     localStorage.setItem(KEY, JSON.stringify(state));
   }
@@ -35,10 +173,16 @@
     const state = load();
     const byID = new Map(widgets().map((w) => [idOf(w), w]));
 
-    (state.order || []).forEach((id) => {
+    remembered = (state.order || []).map(String);
+    const known = new Set(remembered);
+    // A widget the saved order never saw is a new one: it goes at the end.
+    const fresh = widgets().map(idOf).filter((id) => !known.has(id));
+    remembered = remembered.concat(fresh);
+    remembered.forEach((id) => {
       const widget = byID.get(id);
-      if (widget) board.appendChild(widget); // known ones first, in saved order
+      if (widget) board.appendChild(widget);
     });
+
     (state.collapsed || []).forEach((id) => byID.get(id)?.classList.add('collapsed'));
     Object.entries(state.spans || {}).forEach(([id, span]) => {
       if (byID.has(id) && [1, 2, 4].includes(span)) byID.get(id).dataset.span = span;
@@ -50,11 +194,46 @@
       const title = byID.get(id)?.querySelector('[data-widget-title]');
       if (title && String(value).trim()) title.textContent = String(value).trim();
     });
+
+    if (fresh.length || !state.order) save(); // pin the places down from now on
   }
 
   widgets().forEach((widget) => {
     const title = widget.querySelector('[data-widget-title]');
     if (title) title.dataset.defaultTitle = title.textContent.trim();
+
+    const tools = widget.querySelector('.widget-tools');
+    if (!tools || tools.querySelector('.widget-move')) return;
+    const select = document.createElement('select');
+    select.className = 'widget-move';
+    select.setAttribute('aria-label', `Move ${title?.textContent.trim() || 'widget'} to another page`);
+    select.title = 'Move to another page';
+    select.innerHTML = '<option value="">Move to...</option>'
+      + Object.entries(pages)
+        .filter(([id]) => id !== page)
+        .map(([id, destination]) => `<option value="${id}">${destination.label}</option>`)
+        .join('');
+    tools.insertBefore(select, tools.firstChild);
+    select.addEventListener('change', () => {
+      const destination = select.value;
+      if (!destination) return;
+      const key = idOf(widget);
+      const home = widget.dataset.widgetHome;
+      if (destination === home) {
+        delete placements[key];
+      } else {
+        placements[key] = {
+          home,
+          source: widget.dataset.widgetSource,
+          widget: widget.dataset.widget,
+          destination,
+          settings: widgetSettings(widget),
+        };
+      }
+      localStorage.setItem(placementsKey, JSON.stringify(placements));
+      save();
+      location.href = pages[destination].path;
+    });
   });
 
   function columnCount() {

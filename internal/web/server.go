@@ -19,6 +19,7 @@ import (
 
 	"github.com/MrShanks/networth/internal/fx"
 	"github.com/MrShanks/networth/internal/money"
+	"github.com/MrShanks/networth/internal/prices"
 	"github.com/MrShanks/networth/internal/store"
 )
 
@@ -26,11 +27,12 @@ import (
 var assets embed.FS
 
 type Server struct {
-	store *store.Store
-	fx    *fx.Client
-	tmpl  *template.Template
-	log   *slog.Logger
-	mux   *http.ServeMux
+	store  *store.Store
+	fx     *fx.Client
+	prices *prices.Client
+	tmpl   *template.Template
+	log    *slog.Logger
+	mux    *http.ServeMux
 }
 
 func absAmount(amount money.Amount) money.Amount {
@@ -42,7 +44,7 @@ func absAmount(amount money.Amount) money.Amount {
 
 func subAmount(a, b money.Amount) money.Amount { return a - b }
 
-func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, error) {
+func NewServer(s *store.Store, rates *fx.Client, quotes *prices.Client, log *slog.Logger) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"spark":      sparkPoints,
 		"trend":      sparkAmounts,
@@ -57,7 +59,7 @@ func NewServer(s *store.Store, rates *fx.Client, log *slog.Logger) (*Server, err
 		return nil, err
 	}
 
-	srv := &Server{store: s, fx: rates, tmpl: tmpl, log: log, mux: http.NewServeMux()}
+	srv := &Server{store: s, fx: rates, prices: quotes, tmpl: tmpl, log: log, mux: http.NewServeMux()}
 	srv.routes()
 	return srv, nil
 }
@@ -91,6 +93,7 @@ func (s *Server) routes() {
 		static.ServeHTTP(w, r)
 	}))
 	s.mux.HandleFunc("GET /{$}", s.handleDashboard)
+	s.mux.HandleFunc("GET /portfolio", s.handlePortfolio)
 	s.mux.HandleFunc("POST /dashboard/change/reset", s.handleResetDashboardChange)
 	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
@@ -98,9 +101,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /accounts/{id}/owner", s.handleSetAccountOwner)
 	s.mux.HandleFunc("POST /accounts/{id}/bank-ref", s.handleSetAccountBankRef)
 	s.mux.HandleFunc("POST /accounts/{id}/class", s.handleSetAccountClass)
+	s.mux.HandleFunc("POST /trades/import", s.handleImportTrades)
 	s.mux.HandleFunc("POST /funds", s.handleCreateFund)
 	s.mux.HandleFunc("POST /funds/{id}/delete", s.handleDeleteFund)
 	s.mux.HandleFunc("POST /funds/{id}/class", s.handleSetFundClass)
+	s.mux.HandleFunc("POST /funds/{id}/prices/fetch", s.handleFetchPrices)
 	s.mux.HandleFunc("POST /balances", s.handleSetBalance)
 	s.mux.HandleFunc("POST /balances/{id}/delete", s.handleDeleteBalance)
 	s.mux.HandleFunc("POST /fund-updates", s.handleFundUpdate)
@@ -162,8 +167,8 @@ type dashboardData struct {
 	FX           fxView
 	MissingRates []string
 	Chart        Chart
-	InvestChart  Chart
 	Today        string
+	Notice       string
 	Error        string
 }
 
@@ -180,8 +185,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	ledger := v.ledger
 
-	history := ledger.History()
-	investHistory := ledger.InvestHistory()
+	history := ledger.NetWorthHistory()
+	entryHistory := ledger.History()
 	reset, err := s.store.DashboardChangeReset(r.Context())
 	if err != nil {
 		s.fail(w, err)
@@ -201,16 +206,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Entries:      ledger.Entries(50),
 		FX:           v.fx,
 		MissingRates: ledger.MissingRates(),
-		Chart:        buildChart(historySince(history, reset)),
-		InvestChart:  buildInvestChart(investHistorySince(investHistory, reset)),
+		Chart:        buildChart(history),
 		Today:        time.Now().Format("2006-01-02"),
+		Notice:       r.URL.Query().Get("msg"),
 		Error:        r.URL.Query().Get("err"),
 	}
 	data.NetWorthEUR, data.HasEUR = inCurrency(now.NetWorth(), ledger.Rates["EUR"])
 	data.NetWorthUSD, data.HasUSD = inCurrency(now.NetWorth(), ledger.Rates["USD"])
-	if n := len(history); n >= 2 {
-		if history[n-1].Date > reset {
-			data.Change = history[n-1].NetWorth() - history[n-2].NetWorth()
+	if n := len(entryHistory); n >= 2 {
+		if entryHistory[n-1].Date > reset {
+			data.Change = entryHistory[n-1].NetWorth() - entryHistory[n-2].NetWorth()
 			data.HasChange = true
 		}
 	}
@@ -274,30 +279,6 @@ func inCurrency(chf money.Amount, chfPerUnit float64) (money.Amount, bool) {
 		return 0, false
 	}
 	return money.Amount(math.Round(float64(chf) / chfPerUnit)), true
-}
-
-func historySince(points []store.Point, date string) []store.Point {
-	if date == "" {
-		return points
-	}
-	for i, point := range points {
-		if point.Date >= date {
-			return points[i:]
-		}
-	}
-	return nil
-}
-
-func investHistorySince(points []store.ValuePoint, date string) []store.ValuePoint {
-	if date == "" {
-		return points
-	}
-	for i, point := range points {
-		if point.AsOf >= date {
-			return points[i:]
-		}
-	}
-	return nil
 }
 
 func (s *Server) handleResetDashboardChange(w http.ResponseWriter, r *http.Request) {
@@ -555,9 +536,20 @@ func parseFloat(s string) (float64, error) {
 	return strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(s), ",", ""), 64)
 }
 
-// redirect sends the browser back to the dashboard, optionally with a message.
+// redirect sends the browser back to the page the form was submitted from,
+// optionally with a message.
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request, errMsg string) {
-	s.redirectTo(w, r, "/", errMsg)
+	s.redirectTo(w, r, s.origin(r), errMsg)
+}
+
+// origin is the page a form was posted from, so acting on a fund does not
+// bounce the reader to the dashboard from wherever they were.
+func (s *Server) origin(r *http.Request) string {
+	referer, err := url.Parse(r.Referer())
+	if err != nil || referer.Path == "" || (referer.Host != "" && referer.Host != r.Host) {
+		return "/"
+	}
+	return referer.Path
 }
 
 func (s *Server) redirectTo(w http.ResponseWriter, r *http.Request, target, errMsg string) {

@@ -51,6 +51,7 @@
   <a class="navbar-brand" href="/">Net Worth</a>
   <nav class="site-nav" aria-label="Primary navigation">
     <a {{if eq . "networth"}}class="current"{{end}} href="/">Overview</a>
+    <a {{if eq . "portfolio"}}class="current"{{end}} href="/portfolio">Portfolio</a>
     <a {{if eq . "expenses"}}class="current"{{end}} href="/expenses">Expenses</a>
     <a {{if eq . "transactions"}}class="current"{{end}} href="/transactions">Transactions</a>
     <a {{if eq . "graphs"}}class="current"{{end}} href="/graphs">Graphs</a>
@@ -73,6 +74,7 @@
 <h1 class="sr-only">Net Worth overview</h1>
 
 {{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
 {{with .MissingRates}}
   <p class="alert warn">No exchange rate available for {{range $i, $c := .}}{{if $i}}, {{end}}{{$c}}{{end}} —
     those amounts are counted 1:1 for now.</p>
@@ -212,16 +214,6 @@
     </div>
   </section>
 
-  {{if not .InvestChart.Empty}}
-  <section class="widget" data-widget="chart-funds" data-span="2">
-    {{template "widgethint" dict "Title" "Funds: value vs invested" "Hint"
-      "Solid line: market value. Dashed line: money paid in. A step up means you bought more; the gap between the lines is your growth."}}
-    <div class="widget-body">
-      {{template "linechart" .InvestChart}}
-    </div>
-  </section>
-  {{end}}
-
   <section class="widget" data-widget="accounts" data-span="4">
     <header class="widget-head">
       <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">Accounts</span></h2>
@@ -264,12 +256,9 @@
           <tr class="account-row" data-account="{{.ID}}">
             <td>
               <span class="account-grip" draggable="true" aria-label="Drag to reorder {{.Name}}" title="Drag to reorder">&#8942;&#8942;</span>
-              {{if .HasFunds}}<button type="button" class="account-funds-toggle" data-account-funds-toggle="{{.ID}}"
-                      aria-expanded="true" aria-controls="account-funds-{{.ID}}"
-                      aria-label="Collapse funds for {{.Name}}" title="Collapse funds">&#9662;</button>{{end}}
-              <button type="button" class="account-name" data-new-fund-account="{{.ID}}"
-                      aria-expanded="false" aria-controls="new-fund-{{.ID}}"
-                      aria-label="Add a fund to {{.Name}}" title="Add a fund">{{.Name}}</button>
+              <span class="account-name-text">{{.Name}}</span>
+              {{if .HasFunds}}<a class="pill funds-link" href="/portfolio"
+                 title="{{len .Positions}} fund(s) held here">{{len .Positions}} fund{{if ne (len .Positions) 1}}s{{end}}</a>{{end}}
               {{if .CashAsOf}}<div class="empty small account-date">as of {{.CashAsOf}}</div>{{end}}
             </td>
             <td>
@@ -310,100 +299,6 @@
               <form method="post" action="/accounts/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}} with all its funds and history?')">
                 <button class="icon danger" type="submit" aria-label="Delete account" title="Delete account">&#128465;</button>
               </form>
-            </td>
-          </tr>
-          <tr class="account-funds" id="account-funds-{{.ID}}"{{if not .HasFunds}} hidden{{end}}>
-            <td colspan="8">
-              <table>
-          <thead>
-            <tr>
-              <th>Fund</th><th class="num">Units</th><th class="num">Price</th>
-              <th class="num">Avg cost</th><th class="num">Value</th><th class="num">Invested</th>
-              <th class="num">Gain</th><th>Trend</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-          {{range .Positions}}
-          {{$pos := .}}
-            <tr class="fund-row" data-fund="{{.ID}}">
-              <td>
-                <button type="button" class="fund-name" data-fund-update="{{.ID}}"
-                        aria-expanded="false" aria-controls="fund-update-{{.ID}}"
-                        aria-label="Update {{.Name}}" title="Update fund">{{.Name}}</button>
-                {{with .Ticker}}<span class="pill etf">{{.}}</span>{{end}}
-                <span class="pill cur">{{.Currency}}</span>
-                <form class="pill-form" method="post" action="/funds/{{.ID}}/class">
-                  <select name="class" class="pill class-{{.AssetClass}}" onchange="this.form.requestSubmit()"
-                          title="How this fund is counted in asset allocation">
-                    {{range $.AssetClasses}}<option value="{{.}}"{{if eq . $pos.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}
-                  </select>
-                </form>
-                <div class="empty small">as of {{.AsOf}}</div>
-              </td>
-              <td class="num">{{printf "%.4g" .Units}}</td>
-              <td class="num">{{.Price}}</td>
-              <td class="num">{{.AvgCost}}</td>
-              <td class="num">
-                {{.Value}}
-                {{if ne .Currency $.Base}}<div class="empty small">{{.ValueBase}} {{$.Base}}</div>{{end}}
-              </td>
-              <td class="num">{{.Invested}}</td>
-              <td class="num {{if lt .Gain 0}}down{{else}}up{{end}}">
-                {{if ge .Gain 0}}+{{end}}{{.Gain}}
-                <div class="small">{{printf "%+.1f" .GainPct}}%</div>
-              </td>
-              <td>
-                {{with spark .History}}
-                  <svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
-                    <polyline points="{{.}}"/>
-                  </svg>
-                {{else}}<span class="empty small">one entry</span>{{end}}
-              </td>
-              <td class="num">
-                <form method="post" action="/funds/{{.ID}}/delete"
-                      onsubmit="return confirm('Delete {{.Name}} and its history?')">
-                  <button class="icon danger" type="submit" aria-label="Delete fund" title="Delete fund">&#128465;</button>
-                </form>
-              </td>
-            </tr>
-            <tr class="fund-update-row" id="fund-update-{{.ID}}" hidden>
-              <td colspan="9">
-                <form method="post" action="/fund-updates" class="inline-fund-update">
-                  <input type="hidden" name="fund_id" value="{{.ID}}">
-                  <input type="text" name="price" inputmode="decimal" value="{{.Price}}" required
-                         aria-label="Price for {{.Name}} in {{.Currency}}" title="Price in {{.Currency}}">
-                  <input type="text" name="units" inputmode="decimal" placeholder="Units traded"
-                         aria-label="Units traded for {{.Name}}; positive to buy, negative to sell"
-                         title="Optional; positive to buy, negative to sell">
-                  <input type="date" name="as_of" value="{{$.Today}}" required aria-label="Update date for {{.Name}}">
-                  <span class="inline-actions">
-                    <button type="submit">Save</button>
-                    <button type="button" class="icon close-fund-update" aria-label="Cancel fund update" title="Cancel">&times;</button>
-                  </span>
-                </form>
-              </td>
-            </tr>
-          {{end}}
-            <tr class="new-fund-row" id="new-fund-{{$acc.ID}}" hidden>
-              <td colspan="9">
-                <form method="post" action="/funds" class="inline-new-fund">
-                  <input type="hidden" name="account_id" value="{{$acc.ID}}">
-                  <input type="text" name="name" placeholder="Fund name" required maxlength="80" aria-label="Fund name">
-                  <input type="text" name="ticker" placeholder="Ticker" maxlength="12" aria-label="Ticker">
-                  <select name="currency" aria-label="Currency">{{range $.Currencies}}<option value="{{.}}"{{if eq . $.Base}} selected{{end}}>{{.}}</option>{{end}}</select>
-                  <select name="class" aria-label="Asset class">{{range $.AssetClasses}}<option value="{{.}}"{{if eq . "stocks"}} selected{{end}}>{{classLabel .}}</option>{{end}}</select>
-                  <input type="text" name="units" inputmode="decimal" placeholder="Initial units" required aria-label="Initial units">
-                  <input type="text" name="price" inputmode="decimal" placeholder="Price per unit" required aria-label="Price per unit">
-                  <input type="date" name="as_of" value="{{$.Today}}" required aria-label="Purchase date">
-                  <span class="inline-actions">
-                    <button type="submit" class="icon add-row" aria-label="Add fund to {{$acc.Name}}" title="Add fund">+</button>
-                    <button type="button" class="icon close-new-fund" aria-label="Cancel adding a fund" title="Cancel">&times;</button>
-                  </span>
-                </form>
-              </td>
-            </tr>
-          </tbody>
-              </table>
             </td>
           </tr>
         {{end}}
@@ -469,6 +364,7 @@
 </dialog>
 
 <script src="/static/board.js"></script>
+<script src="/static/scroll.js"></script>
 <script>
   function openBalanceDialog(total) {
     const dialog = document.getElementById('accountsDialog');
@@ -478,72 +374,9 @@
     dialog.showModal();
     dialog.querySelector('[name="amount"]').focus();
   }
-  function setFundsToggleState(toggle, expanded) {
-    if (!toggle) return;
-    const accountName = toggle.closest('.account-row').querySelector('.account-name').textContent.trim();
-    toggle.setAttribute('aria-expanded', String(expanded));
-    toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} funds for ${accountName}`);
-    toggle.title = `${expanded ? 'Collapse' : 'Expand'} funds`;
-  }
   document.querySelector('.accounts-table')?.addEventListener('click', (event) => {
     const total = event.target.closest('[data-balance-account]');
     if (total) openBalanceDialog(total);
-
-    const fundsToggle = event.target.closest('[data-account-funds-toggle]');
-    if (fundsToggle) {
-      const details = document.getElementById(`account-funds-${fundsToggle.dataset.accountFundsToggle}`);
-      details.hidden = !details.hidden;
-      setFundsToggleState(fundsToggle, !details.hidden);
-      window.dispatchEvent(new Event('resize'));
-    }
-
-    const addFund = event.target.closest('[data-new-fund-account]');
-    if (addFund) {
-      const row = document.getElementById(`new-fund-${addFund.dataset.newFundAccount}`);
-      const details = row.closest('.account-funds');
-      if (row.hidden) {
-        details.hidden = false;
-        const fundsToggle = document.querySelector(`[data-account-funds-toggle="${addFund.dataset.newFundAccount}"]`);
-        setFundsToggleState(fundsToggle, true);
-      }
-      row.hidden = !row.hidden;
-      addFund.setAttribute('aria-expanded', String(!row.hidden));
-      if (!row.hidden) row.querySelector('[name="name"]').focus();
-      if (row.hidden && !details.querySelector('.fund-row')) details.hidden = true;
-      window.dispatchEvent(new Event('resize'));
-    }
-
-    const closeNewFund = event.target.closest('.close-new-fund');
-    if (closeNewFund) {
-      const row = closeNewFund.closest('.new-fund-row');
-      const details = row.closest('.account-funds');
-      const trigger = document.querySelector(`[aria-controls="${row.id}"]`);
-      row.querySelector('form').reset();
-      row.hidden = true;
-      if (!details.querySelector('.fund-row')) details.hidden = true;
-      trigger?.setAttribute('aria-expanded', 'false');
-      trigger?.focus();
-      window.dispatchEvent(new Event('resize'));
-    }
-
-    const update = event.target.closest('[data-fund-update]');
-    if (update) {
-      const row = document.getElementById(`fund-update-${update.dataset.fundUpdate}`);
-      row.hidden = !row.hidden;
-      update.setAttribute('aria-expanded', String(!row.hidden));
-      if (!row.hidden) row.querySelector('[name="price"]').focus();
-      window.dispatchEvent(new Event('resize'));
-    }
-
-    const close = event.target.closest('.close-fund-update');
-    if (close) {
-      const row = close.closest('.fund-update-row');
-      row.hidden = true;
-      const trigger = document.querySelector(`[aria-controls="${row.id}"]`);
-      trigger?.setAttribute('aria-expanded', 'false');
-      trigger?.focus();
-      window.dispatchEvent(new Event('resize'));
-    }
   });
 
   const newAccountTrigger = document.getElementById('show-new-account');
