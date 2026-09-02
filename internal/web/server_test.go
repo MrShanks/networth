@@ -243,13 +243,20 @@ func TestWorkspaceCreatesAccountAndReplacesMonthlyBalance(t *testing.T) {
 	})
 
 	page := get(t, srv, "/")
-	for _, want := range []string{"2026 account balances", "Savings", ">Jul</th>", ">Aug</th>", ">1,250.00</td>"} {
+	for _, want := range []string{
+		"2026 account balances", "Savings", ">Jul</th>", ">Aug</th>",
+		`action="/accounts/1/balances"`, `name="month" value="2026-07"`,
+		`name="balance" value="1250.00"`, `>1,250.00</summary>`,
+	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("workspace missing %q", want)
 		}
 	}
-	if got := strings.Count(page, ">1,250.00</td>"); got != 4 {
-		t.Errorf("carried-forward balance/total cells = %d, want 4", got)
+	if got := strings.Count(page, ">1,250.00</summary>"); got != 2 {
+		t.Errorf("editable carried-forward balance cells = %d, want 2", got)
+	}
+	if got := strings.Count(page, ">1,250.00</td>"); got != 2 {
+		t.Errorf("net-worth total cells = %d, want 2", got)
 	}
 	if strings.Contains(page, ">Sep</th>") || strings.Contains(page, "Sep 2026:") {
 		t.Error("September was shown before the month completed")
@@ -335,7 +342,7 @@ func TestWorkspaceUpdatesAccountCurrencyAndAssetClassInline(t *testing.T) {
 		`<details class="account-editor"><summary><span>Brokerage</span><small>EUR · Stocks &amp; bonds</small></summary>`,
 		`aria-label="Currency for Brokerage"`, `<option value="EUR" selected>EUR</option>`,
 		`aria-label="Asset class for Brokerage"`, `<option value="stocks_bonds" selected>Stocks &amp; bonds</option>`,
-		">100.00</td>", ">93.46</strong>",
+		">100.00</summary>", ">93.46</strong>",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("updated account missing %q", want)
@@ -382,6 +389,30 @@ func TestWorkspaceCurrentNetWorthUsesLatestCompletedMonth(t *testing.T) {
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("current net-worth summary missing %q", want)
+		}
+	}
+}
+
+func TestWorkspaceExcludesInvestmentsFromAccountBalances(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"DEGIRO"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"1000.00"},
+	})
+	post(t, srv, "/investments/trades", url.Values{
+		"account_id": {"1"}, "name": {"World ETF"}, "ticker": {"IE00B4L5Y983"},
+		"currency": {"USD"}, "as_of": {"2026-08-01"}, "units": {"10"}, "price": {"100.00"},
+	})
+
+	page := get(t, srv, "/")
+	for _, want := range []string{">1,000.00</strong>", "Aug 2026: 1,000.00 CHF"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("balance-only Workspace missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{">1,800.00</strong>", "Aug 2026: 1,800.00 CHF"} {
+		if strings.Contains(page, unwanted) {
+			t.Errorf("Workspace included investment value %q", unwanted)
 		}
 	}
 }

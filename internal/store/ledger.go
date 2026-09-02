@@ -310,6 +310,29 @@ func (l *Ledger) At(date string) Valuation {
 	return v
 }
 
+// AccountBalancesAt values only recorded account balances, excluding funds.
+func (l *Ledger) AccountBalancesAt(date string) Valuation {
+	if date == "" {
+		date = today()
+	}
+	v := Valuation{Date: date}
+	for _, account := range l.Accounts {
+		value := AccountValue{Account: account}
+		if point, ok := latest(l.cash[account.ID], date, func(point CashPoint) string { return point.AsOf }); ok {
+			value.Cash, value.CashAsOf = point.Amount, point.AsOf
+			value.CashBase, _ = l.convert(point.Amount, account.Currency)
+			value.ValueBase = value.CashBase
+		}
+		if account.IsLiability() {
+			v.Liabilities += value.CashBase
+		} else {
+			v.Assets += value.CashBase
+		}
+		v.Accounts = append(v.Accounts, value)
+	}
+	return v
+}
+
 func (l *Ledger) position(f Fund, date string) (Position, bool) {
 	trades := upTo(l.trades[f.ID], date, func(t Trade) string { return t.AsOf })
 	if len(trades) == 0 {

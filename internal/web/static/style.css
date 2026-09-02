@@ -698,6 +698,24 @@ dialog.modal::backdrop {
 .account-editor summary { position: relative; padding-right: 1.25rem; }
 .account-inline-form { display: flex; gap: 0.3rem; margin-top: 0.3rem; }
 .account-inline-form label { min-width: 0; }
+.balance-editor { position: relative; }
+.balance-editor summary {
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.2rem;
+}
+.balance-editor summary::-webkit-details-marker { display: none; }
+.balance-editor summary:hover,
+.balance-editor summary:focus-visible { color: var(--accent); text-decoration-color: currentColor; }
+.balance-editor form {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+.balance-editor input { width: 7rem; min-width: 0; text-align: right; }
+.balance-editor button { padding-inline: 0.65rem; }
 .account-inline-form select {
   width: auto;
   max-width: 8rem;

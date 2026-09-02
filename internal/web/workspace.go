@@ -19,6 +19,7 @@ type workspaceAccount struct {
 
 type workspaceBalance struct {
 	Amount money.Amount
+	Month  string
 	Known  bool
 }
 
@@ -74,7 +75,7 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		Error:        r.URL.Query().Get("err"),
 		Notice:       r.URL.Query().Get("msg"),
 	}
-	current := ledger.At(completedMonth.Format("2006-01") + "-31")
+	current := ledger.AccountBalancesAt(completedMonth.Format("2006-01") + "-31")
 	data.CurrentNetWorth = current.NetWorth()
 	for _, class := range current.Allocation().Classes {
 		switch class.Class {
@@ -98,10 +99,11 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		points := ledger.Balances(account.ID)
 		for _, month := range data.Months {
 			monthEnd := month.Value + "-31"
-			var balance workspaceBalance
+			balance := workspaceBalance{Month: month.Value}
 			for _, point := range points {
 				if point.AsOf <= monthEnd {
-					balance = workspaceBalance{Amount: point.Amount, Known: true}
+					balance.Amount = point.Amount
+					balance.Known = true
 				}
 			}
 			row.Months = append(row.Months, balance)
@@ -109,7 +111,7 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		data.Accounts = append(data.Accounts, row)
 	}
 	for _, month := range data.Months {
-		valuation := ledger.At(month.Value + "-31")
+		valuation := ledger.AccountBalancesAt(month.Value + "-31")
 		total := valuation.NetWorth()
 		data.Totals = append(data.Totals, total)
 	}
@@ -135,7 +137,7 @@ func buildWorkspaceNetWorthChart(ledger *store.Ledger, completedMonth time.Time)
 	var points []datedValue
 	for month := start; !month.After(end); month = month.AddDate(0, 1, 0) {
 		key := month.Format("2006-01")
-		total := ledger.At(key + "-31").NetWorth()
+		total := ledger.AccountBalancesAt(key + "-31").NetWorth()
 		points = append(points, datedValue{
 			date: month.Format("Jan 2006"), value: total.Float(), label: total.String() + " " + store.Base,
 		})
