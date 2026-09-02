@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"math"
 	"slices"
 	"sort"
@@ -44,11 +42,15 @@ type CashPoint struct {
 	Amount money.Amount
 }
 
+// Balances returns the recorded monthly snapshots for an account, oldest first.
+func (l *Ledger) Balances(accountID int64) []CashPoint {
+	return slices.Clone(l.cash[accountID])
+}
+
 // Ledger is the whole database in memory; valuations are derived from it.
 type Ledger struct {
-	Accounts         []Account
-	Funds            []Fund
-	NetWorthBaseline string
+	Accounts []Account
+	Funds    []Fund
 
 	// Rates is how many CHF one unit of each currency buys, applied to every
 	// date: holdings are always shown at the current exchange rate.
@@ -61,7 +63,7 @@ type Ledger struct {
 	prices map[int64][]PriceMark // by fund, oldest first
 }
 
-// Load reads everything the dashboard needs in one go.
+// Load reads the complete financial ledger in one go.
 func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 	l := &Ledger{
 		Rates:  map[string]float64{Base: 1},
@@ -147,11 +149,6 @@ func (s *Store) Load(ctx context.Context) (*Ledger, error) {
 			l.prices[fundID] = append(l.prices[fundID], m)
 			return nil
 		}); err != nil {
-		return nil, err
-	}
-
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT value FROM settings WHERE key = 'net_worth_baseline'`).Scan(&l.NetWorthBaseline); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
@@ -379,43 +376,6 @@ func (l *Ledger) History() []Point {
 	for _, d := range dates {
 		v := l.At(d)
 		out = append(out, Point{Date: d, Assets: v.Assets, Liabilities: v.Liabilities})
-	}
-	return out
-}
-
-// NetWorthHistory treats balances at the baseline as already owned, while
-// retaining the real historical value of investment positions.
-func (l *Ledger) NetWorthHistory() []Point {
-	dates := l.dates()
-	if len(dates) == 0 || l.NetWorthBaseline == "" {
-		return l.History()
-	}
-	if l.NetWorthBaseline >= dates[0] && l.NetWorthBaseline <= today() {
-		dates = append(dates, l.NetWorthBaseline)
-		sort.Strings(dates)
-		dates = slices.Compact(dates)
-	}
-
-	baseline := l.At(l.NetWorthBaseline)
-	baselineCash := make(map[int64]money.Amount, len(baseline.Accounts))
-	for _, account := range baseline.Accounts {
-		baselineCash[account.ID] = account.CashBase
-	}
-
-	out := make([]Point, 0, len(dates))
-	for _, date := range dates {
-		valuation := l.At(date)
-		if date < l.NetWorthBaseline {
-			for _, account := range valuation.Accounts {
-				difference := baselineCash[account.ID] - account.CashBase
-				if account.IsLiability() {
-					valuation.Liabilities += difference
-				} else {
-					valuation.Assets += difference
-				}
-			}
-		}
-		out = append(out, Point{Date: date, Assets: valuation.Assets, Liabilities: valuation.Liabilities})
 	}
 	return out
 }

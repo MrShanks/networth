@@ -651,6 +651,9 @@ func buildBars(months []store.ExpenseMonth, current string) BarChart {
 
 // MonthName renders 2026-08 as "August 2026".
 func monthName(month string) string {
+	if len(month) >= 7 {
+		month = month[:7]
+	}
 	t, err := time.Parse("2006-01", month)
 	if err != nil {
 		return month

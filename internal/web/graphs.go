@@ -38,7 +38,7 @@ func (s *Server) handleGraphs(w http.ResponseWriter, r *http.Request) {
 		Salary:              buildSalaryChart(v.report.Months),
 		SalaryBySubcategory: buildSalaryBySubcategory(v.report.Months),
 		Income:              buildIncomeChart(v.report.Months),
-		NetWorth:            buildChart(v.ledger.NetWorthHistory()),
+		NetWorth:            buildChart(v.ledger.History()),
 		Investments:         buildInvestChart(v.ledger.InvestHistory()),
 		CashFlow:            buildCashFlowBars(v.report.Months),
 		SavingsRate:         buildSavingsRateChart(v.report.Months),

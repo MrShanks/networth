@@ -1,0 +1,103 @@
+{{define "investments.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Investments</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{{template "navbar" "investments"}}
+<h1 class="sr-only">Investments</h1>
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
+<main class="board" id="board">
+  <section class="widget investment-summary" data-widget="investment-summary" data-span="2">
+    <header class="widget-head"><h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title">Portfolio summary ({{.Base}})</span> {{template "hint" "Market value and gain use the latest refreshed closing price."}}</h2><div class="widget-tools"><form method="post" action="/investments/prices"><button type="submit" class="pill-btn widget-action">Refresh prices</button></form>{{template "widgettools"}}</div></header>
+    <div class="widget-body">
+      <div class="cards">
+        <div class="card"><span class="label">Market value</span><strong class="value">{{.Market}}</strong></div>
+        <div class="card"><span class="label">Cost basis</span><strong class="value">{{.Cost}}</strong></div>
+        <div class="card"><span class="label">Gain</span><strong class="value {{if lt .Gain 0}}down{{else}}up{{end}}">{{.Gain}}</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="widget graph-widget" data-widget="investment-growth" data-span="2" data-dynamic-title>
+    {{template "widgethint" (dict "Title" "Investment growth over time" "Hint" "Historical market value compared with invested capital, using refreshed closing prices and current FX rates.")}}
+    <div class="widget-body">
+      {{if .Growth.Empty}}<p class="empty">Import trades and refresh prices to see investment growth.</p>{{else}}
+      <div class="chart-keys"><span><i class="key market"></i>Market value</span><span><i class="key invested"></i>Invested capital</span></div>
+      {{template "graphline" (dict "Chart" .Growth "Label" "Investment market value and invested capital over time" "Class" "market")}}
+      {{end}}
+    </div>
+  </section>
+
+  <section class="widget allocation-widget" data-widget="investment-allocation" data-span="2" data-dynamic-title>
+    {{template "widgethint" (dict "Title" "Asset allocation" "Hint" "Current ETF market values as a share of the investment portfolio.")}}
+    <div class="widget-body">
+      {{if .Allocation}}<div class="allocation-list">{{range .Allocation}}
+        <div class="allocation-row">
+          <div class="allocation-label"><span><strong>{{.Name}}</strong><small>{{.Ticker}}</small></span><span class="num"><strong>{{.Value}}</strong><small>{{printf "%.1f" .Share}}%</small></span></div>
+          <div class="allocation-track"><span style="width: {{.BarWidth}}%"></span></div>
+        </div>
+      {{end}}</div>{{else}}<p class="empty">Import trades to see portfolio allocation.</p>{{end}}
+    </div>
+  </section>
+
+  <section class="widget" data-widget="import-investment-trades" data-span="2">
+    {{template "widgethint" (dict "Title" "Import DEGIRO trades" "Hint" "Upload Transactions.csv again whenever you trade. Purchases and sales already stored are skipped.")}}
+    <div class="widget-body">
+      {{if .Accounts}}
+      <form method="post" action="/investments/import" enctype="multipart/form-data" class="modal-form investment-form">
+        <label><span>Account<span class="required-mark" aria-hidden="true">*</span></span><select name="account_id" required>{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+        <label><span>Transactions.csv<span class="required-mark" aria-hidden="true">*</span></span><input type="file" name="file" accept=".csv,text/csv" required></label>
+        <span class="modal-action"><button type="submit">Import trades</button></span>
+      </form>
+      {{else}}<p class="empty">Create an account in Workspace before importing investments.</p>{{end}}
+    </div>
+  </section>
+
+  <section class="widget" data-widget="add-investment-purchase" data-span="2">
+    {{template "widgethint" (dict "Title" "Add ETF purchase" "Hint" "Record a new purchase manually. Use the same ISIN to add units to an existing ETF.")}}
+    <div class="widget-body">
+      {{if .Accounts}}
+      <form method="post" action="/investments/trades" class="modal-form investment-form">
+        <label><span>Account<span class="required-mark" aria-hidden="true">*</span></span><select name="account_id" required>{{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+        <label><span>Date<span class="required-mark" aria-hidden="true">*</span></span><input type="date" name="as_of" value="{{.Today}}" required></label>
+        <label class="wide">ETF name<input name="name" maxlength="120" placeholder="iShares Core MSCI World"></label>
+        <label><span>ISIN<span class="required-mark" aria-hidden="true">*</span></span><input name="ticker" maxlength="24" placeholder="IE00B4L5Y983" required></label>
+        <label><span>Currency<span class="required-mark" aria-hidden="true">*</span></span><select name="currency" required>{{range .Currencies}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+        <label><span>Units<span class="required-mark" aria-hidden="true">*</span></span><input name="units" type="number" min="0" step="any" placeholder="10" required></label>
+        <label><span>Price per unit<span class="required-mark" aria-hidden="true">*</span></span><input name="price" inputmode="decimal" placeholder="148.14" required></label>
+        <span class="modal-action"><button type="submit">Add purchase</button></span>
+      </form>
+      {{else}}<p class="empty">Create an account in Workspace before adding a purchase.</p>{{end}}
+    </div>
+  </section>
+
+  <section class="widget investment-table-widget" data-widget="investment-positions" data-span="4">
+    {{template "widgethint" (dict "Title" "Current ETF positions" "Hint" "Units held after all purchases and sales, valued at the latest stored price.")}}
+    <div class="widget-body table-scroll">
+      {{if .Positions}}<table class="investment-table">
+        <thead><tr><th>ETF</th><th>ISIN</th><th class="num">Units</th><th class="num">Current price</th><th class="num">Value ({{.Base}})</th><th class="num">Gain ({{.Base}})</th></tr></thead>
+        <tbody>{{range .Positions}}<tr><td><strong>{{.Name}}</strong><small>{{.AccountName}}</small></td><td>{{.Ticker}}</td><td class="num">{{printf "%.4g" .Units}}</td><td class="num">{{.Price}} {{.Currency}}<small>as of {{.AsOf}}</small></td><td class="num">{{.ValueBase}}</td><td class="num {{if lt .GainBase 0}}down{{else}}up{{end}}">{{.GainBase}}</td></tr>{{end}}</tbody>
+      </table>{{else}}<p class="empty">No ETF positions yet. Import Transactions.csv or add a purchase.</p>{{end}}
+    </div>
+  </section>
+
+  <section class="widget investment-table-widget" data-widget="investment-activity" data-span="4">
+    {{template "widgethint" (dict "Title" "Trade history" "Hint" "Every imported or manually recorded purchase and sale, newest first.")}}
+    <div class="widget-body table-scroll">
+      {{if .Trades}}<table class="investment-table">
+        <thead><tr><th>Date</th><th>ETF</th><th>Account</th><th class="num">Units</th><th class="num">Price</th></tr></thead>
+        <tbody>{{range .Trades}}<tr><td>{{.AsOf}}</td><td><strong>{{.FundName}}</strong><small>{{.Ticker}}</small></td><td>{{.AccountName}}</td><td class="num {{if .IsSale}}down{{else}}up{{end}}">{{printf "%.4g" .Units}}</td><td class="num">{{.Price}} {{.Currency}}</td></tr>{{end}}</tbody>
+      </table>{{else}}<p class="empty">No trades recorded yet.</p>{{end}}
+    </div>
+  </section>
+</main>
+<script src="/static/board.js"></script>
+<script src="/static/graphs.js"></script>
+<script src="/static/scroll.js"></script>
+</body>
+</html>{{end}}

@@ -1,0 +1,168 @@
+{{define "linechart"}}
+  <svg class="chart" viewBox="0 0 {{.Width}} {{.Height}}" role="img">
+    {{range .YTicks}}
+      <line class="grid" x1="{{.X}}" y1="{{.Y}}" x2="{{$.Width}}" y2="{{.Y}}"/>
+      <text class="tick" x="{{.X}}" y="{{.Y}}" dx="-8" dy="4" text-anchor="end">{{.Text}}</text>
+    {{end}}
+    <polygon class="area" points="{{.Area}}"/>
+    <polyline class="line" points="{{.Line}}"/>
+    {{range .Extra}}<polyline class="line {{.Class}}" points="{{.Points}}"/>{{end}}
+    {{range .Dots}}
+      <circle class="dot" cx="{{.X}}" cy="{{.Y}}" r="4"><title>{{.Text}}</title></circle>
+    {{end}}
+    {{range .XTicks}}
+      <text class="tick" x="{{.X}}" y="{{.Y}}" text-anchor="middle">{{.Text}}</text>
+    {{end}}
+  </svg>
+{{end}}
+
+{{define "widgethead"}}
+  <header class="widget-head">
+    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.}}</span></h2>
+    <div class="widget-tools">
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+{{end}}
+
+{{define "widgettools"}}
+  <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
+  <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+  <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+{{end}}
+
+{{define "widgethint"}}
+  <header class="widget-head">
+    <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.Title}}</span> {{template "hint" .Hint}}</h2>
+    <div class="widget-tools">
+      <button type="button" class="icon resize" data-resize aria-label="Change widget width" title="Change width"></button>
+      <button type="button" class="icon" data-collapse aria-label="Collapse or expand"></button>
+      <span class="grip" draggable="true" title="Drag to move" aria-label="Drag to move">&#8942;&#8942;</span>
+    </div>
+  </header>
+{{end}}
+
+{{define "hint"}}<button type="button" class="hint" data-tip="{{.}}" aria-label="{{.}}"></button>{{end}}
+
+{{define "navbar"}}
+<div class="navbar">
+  <a class="navbar-brand" href="/">Net Worth</a>
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a {{if eq . "workspace"}}class="current"{{end}} href="/">Workspace</a>
+    <a {{if eq . "investments"}}class="current"{{end}} href="/investments">Investments</a>
+    <a {{if eq . "expenses"}}class="current"{{end}} href="/expenses">Expenses</a>
+    <a {{if eq . "transactions"}}class="current"{{end}} href="/transactions">Transactions</a>
+    <a {{if eq . "graphs"}}class="current"{{end}} href="/graphs">Graphs</a>
+    <a {{if eq . "records"}}class="current"{{end}} href="/records">Records</a>
+    <a {{if eq . "retirement"}}class="current"{{end}} href="/retire">Retirement</a>
+  </nav>
+</div>
+{{end}}
+
+{{define "workspace.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Net Worth</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{{template "navbar" "workspace"}}
+<h1 class="sr-only">Workspace</h1>
+<header class="page-head workspace-period-head">
+  <div class="toolbar expense-view-toolbar">
+    <strong class="workspace-period-label">Account balances</strong>
+    <form class="month-picker" method="get" action="/">
+      <label><span>Viewing</span><input type="number" name="year" min="1900" max="{{.CurrentYear}}" value="{{.Year}}" onchange="this.form.requestSubmit()"></label>
+    </form>
+  </div>
+</header>
+{{with .Error}}<p class="alert">{{.}}</p>{{end}}
+{{with .Notice}}<p class="alert ok">{{.}}</p>{{end}}
+<main class="board" id="board">
+  <section class="widget" data-widget="add-account" data-span="2">
+    {{template "widgethint" (dict "Title" "Add account" "Hint" "Creates an account and records its first monthly balance.")}}
+    <div class="widget-body">
+      <form method="post" action="/accounts" class="modal-form workspace-form">
+        <label><span>Name<span class="required-mark" aria-hidden="true">*</span></span><input name="name" required maxlength="80" autocomplete="off"></label>
+        <label><span>Currency<span class="required-mark" aria-hidden="true">*</span></span><select name="currency" required>{{range .Currencies}}<option value="{{.}}"{{if eq . "CHF"}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+        <label><span>Type<span class="required-mark" aria-hidden="true">*</span></span><select name="kind" required><option value="asset">Asset</option><option value="liability">Liability</option></select></label>
+        <label><span>Month<span class="required-mark" aria-hidden="true">*</span></span><input type="month" name="month" value="{{.Month}}" required></label>
+        <label class="wide"><span>Balance<span class="required-mark" aria-hidden="true">*</span></span><input name="balance" inputmode="decimal" placeholder="12500.00" required></label>
+        <span class="modal-action"><button type="submit">Add account</button></span>
+      </form>
+    </div>
+  </section>
+
+  <section class="widget" data-widget="import-account-history" data-span="2">
+    {{template "widgethint" (dict "Title" "Import balance history" "Hint" "Upload account, month, balance rows. Unknown accounts are created as CHF assets; add currency and type columns to override those defaults. Missing months stay empty.")}}
+    <div class="widget-body">
+      <form method="post" action="/balances/import" enctype="multipart/form-data" class="modal-form workspace-form">
+        <label class="wide"><span>CSV file<span class="required-mark" aria-hidden="true">*</span></span><input type="file" name="file" accept=".csv,text/csv" required></label>
+        <span class="modal-action"><button type="submit">Import history</button></span>
+      </form>
+    </div>
+  </section>
+
+  {{if .Accounts}}
+  <section class="widget networth-summary" data-widget="current-net-worth" data-span="2" data-dynamic-title>
+    {{template "widgethint" (dict "Title" (printf "Summary (%s)" .Base) "Hint" "Net worth, cash liquidity, and invested assets at the end of the latest completed month.")}}
+    <div class="widget-body">
+      <div class="cards">
+        <div class="card">
+          <span class="label">Net worth</span>
+          <strong class="value {{if lt .CurrentNetWorth 0}}down{{else}}up{{end}}">{{.CurrentNetWorth}}</strong>
+          <span class="delta summary-detail">as of {{.CurrentAsOf}}</span>
+        </div>
+        <div class="card">
+          <span class="label">Liquidity</span>
+          <strong class="value">{{.Liquidity}}</strong>
+          <span class="delta summary-detail">cash assets</span>
+        </div>
+        <div class="card">
+          <span class="label">Invested</span>
+          <strong class="value">{{.Invested}}</strong>
+          <span class="delta summary-detail">stocks and bonds</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="widget" data-widget="monthly-balance" data-span="2">
+    {{template "widgethint" (dict "Title" "Add monthly balance" "Hint" "Saving the same account and month again replaces that month's balance.")}}
+    <div class="widget-body">
+      <form method="post" action="/balances" class="monthly-balance-form">
+        <label><span>Account<span class="required-mark" aria-hidden="true">*</span></span><select name="account_id" required>{{range .Accounts}}<option value="{{.ID}}">{{.Name}} ({{.Currency}})</option>{{end}}</select></label>
+        <label><span>Month<span class="required-mark" aria-hidden="true">*</span></span><input type="month" name="month" value="{{$.Month}}" required></label>
+        <label><span>Balance<span class="required-mark" aria-hidden="true">*</span></span><input name="balance" inputmode="decimal" placeholder="12500.00" required></label>
+        <button type="submit">Save month</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="widget account-matrix-widget" data-widget="yearly-account-matrix" data-span="4" data-dynamic-title>
+    {{template "widgethint" (dict "Title" (printf "%d account balances" .Year) "Hint" "Each value is the latest balance recorded on or before that month. A dash means the account had no balance yet.")}}
+    <div class="widget-body table-scroll">
+      <table class="account-matrix">
+        <thead><tr><th>Account</th>{{range .Months}}<th class="num">{{.Label}}</th>{{end}}</tr></thead>
+        <tbody>
+          {{range .Accounts}}{{$account := .}}<tr><th scope="row"><details class="account-editor"><summary><span>{{.Name}}</span><small>{{.Currency}} · {{classLabel .AssetClass}}</small></summary><form method="post" action="/accounts/{{.ID}}" class="account-inline-form"><label><span class="sr-only">Currency for {{.Name}}</span><select name="currency" aria-label="Currency for {{.Name}}">{{range $.Currencies}}<option value="{{.}}"{{if eq . $account.Currency}} selected{{end}}>{{.}}</option>{{end}}</select></label><label><span class="sr-only">Asset class for {{.Name}}</span><select name="asset_class" aria-label="Asset class for {{.Name}}">{{range $.AssetClasses}}<option value="{{.}}"{{if eq . $account.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}</select></label><button type="submit" class="account-save">Save</button></form></details></th>{{range .Months}}<td class="num">{{if .Known}}{{.Amount}}{{else}}<span class="empty">—</span>{{end}}</td>{{end}}</tr>{{end}}
+        </tbody>
+        <tfoot><tr><th>Net worth ({{.Base}})</th>{{range .Totals}}<td class="num">{{.}}</td>{{end}}</tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="widget graph-widget" data-widget="all-time-net-worth" data-span="4" data-dynamic-title>
+    {{template "widgethint" (dict "Title" "Net worth over time" "Hint" "Every completed month from the first recorded account balance through today, in CHF. Liabilities are subtracted and the latest known balance carries forward.")}}
+    <div class="widget-body">{{template "linechart" .Chart}}</div>
+  </section>
+  {{end}}
+</main>
+<script src="/static/board.js"></script>
+<script src="/static/scroll.js"></script>
+</body>
+</html>{{end}}

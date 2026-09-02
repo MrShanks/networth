@@ -37,7 +37,7 @@
 
 <div class="board" id="board">
 
-<section class="widget expense-summary" data-widget="period-summary" data-span="2">
+<section class="widget expense-summary" data-widget="period-summary" data-span="2" data-dynamic-title>
   {{template "widgethead" (printf "%s summary (%s)" (periodName .Period.Month .IsYear .IsAll) .Base)}}
   <div class="widget-body">
     <div class="cards">
@@ -54,7 +54,7 @@
   </div>
 </section>
 
-{{if not .IsAll}}<section class="widget comparison" data-widget="period-comparison" data-span="2">
+{{if not .IsAll}}<section class="widget comparison" data-widget="period-comparison" data-span="2" data-dynamic-title>
   {{template "widgethead" (printf "Compared with previous period (%s)" .Base)}}
   <div class="widget-body">
     <table class="comparison-summary">
@@ -103,7 +103,7 @@
   </div>
 </section>
 
-<section class="widget" id="entries" data-widget="entries" data-span="2">
+<section class="widget" id="entries" data-widget="entries" data-span="2" data-dynamic-title>
   <header class="widget-head">
     <h2><span class="widget-title" data-widget-title contenteditable="plaintext-only" role="textbox" aria-label="Panel title" title="Click to rename">{{.EntryTitle}}</span>{{with .Category}} <a class="clear-filter" href="{{$.PeriodURL}}#entries">Clear</a>{{end}}</h2>
     <div class="widget-tools">{{if and .Period.Expenses (not .Category) (not .IsYear)}}<form method="post" action="/expenses/month/{{.Period.Month}}/delete" onsubmit="return confirm('Delete all entries in this month?')"><button class="icon danger" type="submit" aria-label="Delete this month" title="Delete this month">&#128465;</button></form>{{end}}{{template "widgettools"}}</div>

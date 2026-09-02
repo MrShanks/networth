@@ -21,6 +21,42 @@ type BrokerTrade struct {
 	Price    money.Amount
 }
 
+// TradeActivity is one stored broker trade with its fund and account context.
+type TradeActivity struct {
+	ID          int64
+	AccountName string
+	FundName    string
+	Ticker      string
+	Currency    string
+	AsOf        string
+	Units       float64
+	Price       money.Amount
+}
+
+func (t TradeActivity) IsSale() bool { return t.Units < 0 }
+
+// TradeActivities returns stored trades newest first.
+func (s *Store) TradeActivities(ctx context.Context) ([]TradeActivity, error) {
+	var activities []TradeActivity
+	err := query(ctx, s.db, `
+        SELECT t.id, a.name, f.name, f.ticker, f.currency, t.as_of, t.units, t.price_cents
+        FROM trades t
+        JOIN funds f ON f.id = t.fund_id
+        JOIN accounts a ON a.id = f.account_id
+        ORDER BY t.as_of DESC, t.id DESC`, func(scan scanner) error {
+		var activity TradeActivity
+		var cents int64
+		if err := scan(&activity.ID, &activity.AccountName, &activity.FundName, &activity.Ticker,
+			&activity.Currency, &activity.AsOf, &activity.Units, &cents); err != nil {
+			return err
+		}
+		activity.Price = money.Amount(cents)
+		activities = append(activities, activity)
+		return nil
+	})
+	return activities, err
+}
+
 // ImportTrades files broker trades under an account, creating any fund that
 // isn't there yet. Trades already stored are counted as duplicates and left
 // alone, so importing the same export twice changes nothing.

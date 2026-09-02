@@ -30,20 +30,22 @@ var Currencies = []string{"CHF", "EUR", "USD"}
 // Asset classes group accounts and funds for the allocation and liquidity
 // breakdowns. Cash is the only class counted as liquid.
 const (
-	ClassCash   = "cash"
-	ClassStocks = "stocks"
-	ClassBonds  = "bonds"
-	ClassOther  = "other"
+	ClassCash        = "cash"
+	ClassStocks      = "stocks"
+	ClassBonds       = "bonds"
+	ClassStocksBonds = "stocks_bonds"
+	ClassOther       = "other"
 )
 
 // AssetClasses lists every class, in display order.
-var AssetClasses = []string{ClassCash, ClassStocks, ClassBonds, ClassOther}
+var AssetClasses = []string{ClassCash, ClassStocks, ClassBonds, ClassStocksBonds, ClassOther}
 
 var classLabels = map[string]string{
-	ClassCash:   "Cash",
-	ClassStocks: "Stocks",
-	ClassBonds:  "Bonds",
-	ClassOther:  "Other",
+	ClassCash:        "Cash",
+	ClassStocks:      "Stocks",
+	ClassBonds:       "Bonds",
+	ClassStocksBonds: "Stocks & bonds",
+	ClassOther:       "Other",
 }
 
 // ClassLabel renders an asset class for display, e.g. "cash" -> "Cash".
@@ -225,11 +227,6 @@ func migrate(db *sql.DB) error {
 	if err := migrateSnapshotsToTrades(db); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`
-		INSERT INTO settings (key, value) VALUES ('net_worth_baseline', date('now'))
-		ON CONFLICT(key) DO NOTHING`); err != nil {
-		return fmt.Errorf("set net worth baseline: %w", err)
-	}
 	return adoptBase(db)
 }
 
@@ -377,29 +374,6 @@ func adoptBase(db *sql.DB) error {
 	return nil
 }
 
-// DashboardChangeReset returns the latest history date whose change indicator
-// the user dismissed.
-func (s *Store) DashboardChangeReset(ctx context.Context) (string, error) {
-	var date string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT value FROM settings WHERE key = 'dashboard_change_reset'`).Scan(&date)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return date, err
-}
-
-// SetDashboardChangeReset dismisses the change indicator through date.
-func (s *Store) SetDashboardChangeReset(ctx context.Context, date string) error {
-	if _, err := time.Parse("2006-01-02", date); err != nil {
-		return errors.New("invalid reset date")
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO settings (key, value) VALUES ('dashboard_change_reset', ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, date)
-	return err
-}
-
 func (s *Store) CreateAccount(ctx context.Context, name, owner, bankRef, kind, currency, class, asOf string, openingBalance *money.Amount) error {
 	if kind != KindAsset && kind != KindLiability {
 		return fmt.Errorf("unknown account kind %q", kind)
@@ -411,7 +385,9 @@ func (s *Store) CreateAccount(ctx context.Context, name, owner, bankRef, kind, c
 		return err
 	}
 	if openingBalance != nil {
-		if err := checkDate(asOf); err != nil {
+		var err error
+		asOf, err = balanceMonth(asOf)
+		if err != nil {
 			return err
 		}
 	}
@@ -480,7 +456,26 @@ func (s *Store) SetAccountCurrency(ctx context.Context, id int64, currency strin
 	return nil
 }
 
-// SetAccountOwner changes the person used to group an account on the dashboard.
+// SetAccountDetails updates the denomination and asset class together.
+func (s *Store) SetAccountDetails(ctx context.Context, id int64, currency, class string) error {
+	if err := checkCurrency(currency); err != nil {
+		return err
+	}
+	if err := checkClass(class); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE accounts SET currency = ?, asset_class = ? WHERE id = ?`, currency, class, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAccountOwner changes the people associated with an account.
 func (s *Store) SetAccountOwner(ctx context.Context, id int64, owner string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET owner = ? WHERE id = ?`, owner, id)
 	if err != nil {
@@ -580,14 +575,99 @@ func (s *Store) SetFundClass(ctx context.Context, id int64, class string) error 
 
 // SetBalance records (or overwrites) a cash balance in the account's currency.
 func (s *Store) SetBalance(ctx context.Context, accountID int64, asOf string, amount money.Amount) error {
-	if err := checkDate(asOf); err != nil {
+	month, err := balanceMonth(asOf)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
         INSERT INTO balances (account_id, as_of, cents) VALUES (?, ?, ?)
         ON CONFLICT (account_id, as_of) DO UPDATE SET cents = excluded.cents`,
-		accountID, asOf, int64(amount))
+		accountID, month, int64(amount))
 	return err
+}
+
+type BalanceSnapshot struct {
+	AccountName string
+	Currency    string
+	Kind        string
+	Month       string
+	Amount      money.Amount
+}
+
+// ImportBalances atomically creates missing accounts and upserts sparse monthly snapshots.
+func (s *Store) ImportBalances(ctx context.Context, snapshots []BalanceSnapshot) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	accountIDs := make(map[string]int64)
+	created := 0
+	for _, snapshot := range snapshots {
+		name := strings.TrimSpace(snapshot.AccountName)
+		if name == "" {
+			return 0, errors.New("account name is required")
+		}
+		currency := snapshot.Currency
+		if currency == "" {
+			currency = Base
+		}
+		if err := checkCurrency(currency); err != nil {
+			return 0, err
+		}
+		kind := snapshot.Kind
+		if kind == "" {
+			kind = KindAsset
+		}
+		if kind != KindAsset && kind != KindLiability {
+			return 0, fmt.Errorf("unknown account kind %q", kind)
+		}
+		month, err := balanceMonth(snapshot.Month)
+		if err != nil {
+			return 0, err
+		}
+
+		key := strings.ToLower(name)
+		accountID, ok := accountIDs[key]
+		if !ok {
+			err := tx.QueryRowContext(ctx, `SELECT id FROM accounts WHERE lower(trim(name)) = ?`, key).Scan(&accountID)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				result, insertErr := tx.ExecContext(ctx,
+					`INSERT INTO accounts (name, owner, bank_ref, kind, currency, asset_class) VALUES (?, '', '', ?, ?, ?)`,
+					name, kind, currency, ClassCash)
+				if insertErr != nil {
+					return 0, insertErr
+				}
+				accountID, err = result.LastInsertId()
+				if err != nil {
+					return 0, err
+				}
+				created++
+			case err != nil:
+				return 0, err
+			}
+			accountIDs[key] = accountID
+		}
+		if _, err := tx.ExecContext(ctx, `
+            INSERT INTO balances (account_id, as_of, cents) VALUES (?, ?, ?)
+            ON CONFLICT (account_id, as_of) DO UPDATE SET cents = excluded.cents`,
+			accountID, month, int64(snapshot.Amount)); err != nil {
+			return 0, err
+		}
+	}
+	return created, tx.Commit()
+}
+
+func balanceMonth(value string) (string, error) {
+	if len(value) == 7 {
+		value += "-01"
+	}
+	if err := checkDate(value); err != nil {
+		return "", err
+	}
+	return value[:7] + "-01", nil
 }
 
 func (s *Store) DeleteBalance(ctx context.Context, id int64) error {

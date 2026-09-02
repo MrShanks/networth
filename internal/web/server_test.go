@@ -33,21 +33,17 @@ func newTestServer(t *testing.T) *Server {
 		io.WriteString(w, `{"amount":1,"base":"CHF","date":"2026-08-21","rates":{"EUR":1.07,"USD":1.25}}`)
 	}))
 	t.Cleanup(rates.Close)
-
 	quotes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "search") {
 			io.WriteString(w, `{"quotes":[{"symbol":"TEST.L"}]}`)
 			return
 		}
-		io.WriteString(w, `{"chart":{"result":[{"meta":{"currency":"USD","symbol":"TEST.L","gmtoffset":0},
-			"timestamp":[1735862400,1735948800],
-			"indicators":{"quote":[{"close":[200.5,201.5]}]}}]}}`)
+		io.WriteString(w, `{"chart":{"result":[{"meta":{"currency":"USD","symbol":"TEST.L","gmtoffset":0},"timestamp":[1788134400],"indicators":{"quote":[{"close":[160.00]}]}}]}}`)
 	}))
 	t.Cleanup(quotes.Close)
 
 	srv, err := NewServer(db, fx.NewClient(rates.URL, store.Base, store.Foreign()),
-		prices.NewClient(quotes.URL+"/search", quotes.URL+"/chart/"),
-		slog.New(slog.DiscardHandler))
+		prices.NewClient(quotes.URL+"/search", quotes.URL+"/chart/"), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -81,25 +77,10 @@ func post(t *testing.T, srv *Server, path string, form url.Values) {
 	}
 }
 
-// seed fills the store through the HTTP handlers, the way a browser would.
+// seed adds enough transaction data to exercise populated page templates.
 func seed(t *testing.T, srv *Server) {
 	t.Helper()
 
-	post(t, srv, "/accounts", url.Values{
-		"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"},
-	})
-	post(t, srv, "/funds", url.Values{
-		"account_id": {"1"}, "name": {"World"}, "ticker": {"vwce"}, "currency": {"USD"},
-	})
-	post(t, srv, "/balances", url.Values{
-		"account_id": {"1"}, "amount": {"5000"}, "as_of": {"2026-01-31"},
-	})
-	post(t, srv, "/fund-updates", url.Values{
-		"fund_id": {"1"}, "price": {"100"}, "units": {"10"}, "as_of": {"2026-01-31"},
-	})
-	post(t, srv, "/fund-updates", url.Values{
-		"fund_id": {"1"}, "price": {"120"}, "as_of": {"2026-02-28"},
-	})
 	post(t, srv, "/expenses", url.Values{
 		"amount": {"1200"}, "currency": {"CHF"}, "new_category": {"Rent"}, "as_of": {"2026-02-05"},
 	})
@@ -111,7 +92,8 @@ func TestPagesRender(t *testing.T) {
 	srv := newTestServer(t)
 
 	pages := []struct{ path, wants string }{
-		{"/", "Net worth"},
+		{"/", "Workspace"},
+		{"/investments", "Investments"},
 		{"/expenses", "Monthly Expenses"},
 		{"/expenses/year", "Yearly Expenses"},
 		{"/transactions", "Add transaction"},
@@ -142,6 +124,322 @@ func TestPagesRender(t *testing.T) {
 	}
 }
 
+func importInvestmentCSV(t *testing.T, srv *Server, csv string) string {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	if err := form.WriteField("account_id", "1"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := form.CreateFormFile("file", "Transactions.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, csv); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/investments/import", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "err=") {
+		t.Fatalf("investment import = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	return rec.Header().Get("Location")
+}
+
+func TestInvestmentsImportIsIdempotentAndTracksPosition(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"DEGIRO"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"0.00"},
+	})
+	csv := "Data,Prodotto,ISIN,Quantità,Quotazione,\n" +
+		"28-08-2026,World ETF,IE00B4L5Y983,25,148.14,USD\n"
+	if location := importInvestmentCSV(t, srv, csv); !strings.Contains(location, "Imported+1+trade") {
+		t.Errorf("first import notice = %q", location)
+	}
+	if location := importInvestmentCSV(t, srv, csv); !strings.Contains(location, "1+duplicate") {
+		t.Errorf("repeat import notice = %q", location)
+	}
+
+	page := get(t, srv, "/investments")
+	for _, want := range []string{
+		"Portfolio summary (CHF)", "Current ETF positions", "Trade history",
+		"Investment growth over time", "Asset allocation", "Market value", "Invested capital",
+		"World ETF", "IE00B4L5Y983", ">25</td>", "160.00 USD",
+		"as of 2026-08-31", ">3,200.00</strong>", ">237.20</strong>", "100.0%",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("Investments page missing %q", want)
+		}
+	}
+	activityStart := strings.Index(page, `data-widget="investment-activity"`)
+	if activityStart < 0 {
+		t.Fatal("trade history widget is missing")
+	}
+	if got := strings.Count(page[activityStart:], "2026-08-28"); got != 1 {
+		t.Errorf("trade history has %d matching trades, want 1", got)
+	}
+	growthStart := strings.Index(page, `data-widget="investment-growth"`)
+	allocationStart := strings.Index(page, `data-widget="investment-allocation"`)
+	if growthStart < 0 || allocationStart < 0 || growthStart >= allocationStart {
+		t.Fatal("growth and allocation widgets are missing or out of order")
+	}
+	if !strings.Contains(page[growthStart:allocationStart], `class="line invested"`) {
+		t.Error("growth chart does not compare market value with invested capital")
+	}
+}
+
+func TestInvestmentsAddsAnotherPurchaseToExistingETF(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"DEGIRO"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"0.00"},
+	})
+	post(t, srv, "/investments/trades", url.Values{
+		"account_id": {"1"}, "name": {"World ETF"}, "ticker": {"IE00B4L5Y983"},
+		"currency": {"USD"}, "as_of": {"2026-08-01"}, "units": {"10"}, "price": {"140.00"},
+	})
+	post(t, srv, "/investments/trades", url.Values{
+		"account_id": {"1"}, "name": {"World ETF"}, "ticker": {"IE00B4L5Y983"},
+		"currency": {"USD"}, "as_of": {"2026-08-28"}, "units": {"5"}, "price": {"148.00"},
+	})
+	activities, err := srv.store.TradeActivities(t.Context())
+	if err != nil || len(activities) != 2 {
+		t.Fatalf("stored activities = %d, %v; want 2", len(activities), err)
+	}
+
+	page := get(t, srv, "/investments")
+	if !strings.Contains(page, ">15</td>") {
+		t.Error("manual purchases did not accumulate to 15 units")
+	}
+	if got := strings.Count(page, "World ETF"); got < 3 {
+		t.Errorf("World ETF rendered %d times, want a position and two history rows", got)
+	}
+}
+
+func TestPortfolioPageIsRemoved(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/portfolio", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /portfolio = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorkspaceCreatesAccountAndReplacesMonthlyBalance(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-07"}, "balance": {"1000.00"},
+	})
+	post(t, srv, "/accounts/1/balances", url.Values{
+		"month": {"2026-07"}, "balance": {"1250.00"},
+	})
+
+	page := get(t, srv, "/")
+	for _, want := range []string{"2026 account balances", "Savings", ">Jul</th>", ">Aug</th>", ">1,250.00</td>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("workspace missing %q", want)
+		}
+	}
+	if got := strings.Count(page, ">1,250.00</td>"); got != 4 {
+		t.Errorf("carried-forward balance/total cells = %d, want 4", got)
+	}
+	if strings.Contains(page, ">Sep</th>") || strings.Contains(page, "Sep 2026:") {
+		t.Error("September was shown before the month completed")
+	}
+}
+
+func TestWorkspaceImportsSparseBalanceHistoryAtomically(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-07"}, "balance": {"1000.00"},
+	})
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("file", "balances.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(part, "account,month,balance\nSavings,2025-01,800.00\nSavings,2025-03,900.00\n")
+	form.Close()
+	req := httptest.NewRequest(http.MethodPost, "/balances/import", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "err=") {
+		t.Fatalf("import = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	page := get(t, srv, "/")
+	for _, want := range []string{"Savings", `aria-label="Currency for Savings"`, ">Jul</th>", ">1,000.00</td>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("workspace missing current-year matrix value %q", want)
+		}
+	}
+	if strings.Contains(page, "January 2025") || strings.Contains(page, "March 2025") {
+		t.Error("Workspace matrix displayed history outside the current year")
+	}
+}
+
+func TestWorkspaceImportCreatesMissingAccounts(t *testing.T) {
+	srv := newTestServer(t)
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("file", "balances.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(part, "account,month,balance,currency,type\nSavings,2025-01,800.00,CHF,asset\nMortgage,2025-03,200000.00,EUR,liability\n")
+	form.Close()
+	req := httptest.NewRequest(http.MethodPost, "/balances/import", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "created+2+accounts") {
+		t.Fatalf("import = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	page := get(t, srv, "/")
+	for _, want := range []string{
+		"Savings", `aria-label="Currency for Savings"`,
+		"Mortgage", `<option value="EUR" selected>EUR</option>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("workspace missing imported account value %q", want)
+		}
+	}
+}
+
+func TestWorkspaceUpdatesAccountCurrencyAndAssetClassInline(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Brokerage"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"100.00"},
+	})
+	post(t, srv, "/accounts/1", url.Values{
+		"currency": {"EUR"}, "asset_class": {"stocks_bonds"},
+	})
+
+	page := get(t, srv, "/")
+	for _, want := range []string{
+		`<details class="account-editor"><summary><span>Brokerage</span><small>EUR · Stocks &amp; bonds</small></summary>`,
+		`aria-label="Currency for Brokerage"`, `<option value="EUR" selected>EUR</option>`,
+		`aria-label="Asset class for Brokerage"`, `<option value="stocks_bonds" selected>Stocks &amp; bonds</option>`,
+		">100.00</td>", ">93.46</strong>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("updated account missing %q", want)
+		}
+	}
+}
+
+func TestWorkspaceMonthlyTotalsSubtractLiabilities(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-01"}, "balance": {"1000.00"},
+	})
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Card"}, "currency": {"CHF"}, "kind": {"liability"},
+		"month": {"2026-01"}, "balance": {"250.00"},
+	})
+
+	page := get(t, srv, "/")
+	if got := strings.Count(page, ">750.00</td>"); got == 0 {
+		t.Error("monthly net-worth total does not subtract liabilities")
+	}
+	if !strings.Contains(page, "Jan 2026: 750.00 CHF") {
+		t.Error("net-worth chart is not based on the monthly table total")
+	}
+}
+
+func TestWorkspaceCurrentNetWorthUsesLatestCompletedMonth(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"1200.00"},
+	})
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Card"}, "currency": {"CHF"}, "kind": {"liability"},
+		"month": {"2026-08"}, "balance": {"200.00"},
+	})
+	post(t, srv, "/accounts/1/balances", url.Values{"month": {"2026-09"}, "balance": {"5000.00"}})
+
+	page := get(t, srv, "/")
+	for _, want := range []string{
+		`data-widget="current-net-worth"`, "Summary (CHF)",
+		">1,000.00</strong>", "as of August 2026",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("current net-worth summary missing %q", want)
+		}
+	}
+}
+
+func TestWorkspaceSummarySeparatesLiquidityAndInvestedAssets(t *testing.T) {
+	srv := newTestServer(t)
+	accounts := []struct {
+		name, kind, class, balance string
+	}{
+		{"Cash", "asset", "cash", "100.00"},
+		{"Shares", "asset", "stocks", "200.00"},
+		{"Bonds", "asset", "bonds", "300.00"},
+		{"Mixed", "asset", "stocks_bonds", "400.00"},
+		{"Card", "liability", "cash", "50.00"},
+	}
+	for index, account := range accounts {
+		post(t, srv, "/accounts", url.Values{
+			"name": {account.name}, "currency": {"CHF"}, "kind": {account.kind},
+			"month": {"2026-08"}, "balance": {account.balance},
+		})
+		if account.class != store.ClassCash {
+			post(t, srv, fmt.Sprintf("/accounts/%d", index+1), url.Values{
+				"currency": {"CHF"}, "asset_class": {account.class},
+			})
+		}
+	}
+
+	page := get(t, srv, "/")
+	for _, want := range []string{
+		"Summary (CHF)", "Liquidity", ">100.00</strong>",
+		"Invested", ">900.00</strong>", "Net worth", ">950.00</strong>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("summary missing %q", want)
+		}
+	}
+}
+
+func TestWorkspaceYearSelectorDoesNotLimitNetWorthChart(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2025-01"}, "balance": {"800.00"},
+	})
+	post(t, srv, "/accounts/1/balances", url.Values{"month": {"2026-03"}, "balance": {"1200.00"}})
+
+	page := get(t, srv, "/?year=2025")
+	for _, want := range []string{
+		`name="year" min="1900" max="2026" value="2025"`,
+		"2025 account balances", ">Dec</th>", "Net worth over time",
+		"Jan 2025: 800.00 CHF", "Mar 2026: 1,200.00 CHF",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("selected-year workspace missing %q", want)
+		}
+	}
+}
+
 func TestClientDisconnectErrors(t *testing.T) {
 	for _, err := range []error{
 		fmt.Errorf("write tcp: %w", syscall.EPIPE),
@@ -160,7 +458,7 @@ func TestEveryWidgetHasAnEditableTitle(t *testing.T) {
 	srv := newTestServer(t)
 	seed(t, srv)
 
-	for _, path := range []string{"/", "/expenses", "/graphs", "/records", "/retire"} {
+	for _, path := range []string{"/expenses", "/graphs", "/records", "/retire"} {
 		body := get(t, srv, path)
 		widgets := strings.Count(body, `<section class="widget`)
 		titles := strings.Count(body, `data-widget-title`)
@@ -262,60 +560,6 @@ func TestGraphsShowSalaryBySecondaryCategory(t *testing.T) {
 	}
 	if strings.Contains(panel, `class="stack-band`) {
 		t.Error("salary secondary-category graph should use lines, not stacked bands")
-	}
-}
-
-func TestDashboardShowsConvertedTotals(t *testing.T) {
-	srv := newTestServer(t)
-	seed(t, srv)
-
-	body := get(t, srv, "/")
-	// 5,000 CHF cash plus 10 units at 120 USD, converted at 1/1.25.
-	if !strings.Contains(body, "5,960.00") {
-		t.Error("net worth is not the expected 5,960.00")
-	}
-	if !strings.Contains(body, `class="line"`) {
-		t.Error("the net worth chart has no line")
-	}
-	if !strings.Contains(body, "Summary (CHF)") {
-		t.Error("the summary widget should state the currency once, in its header")
-	}
-}
-
-func TestDashboardGroupsAccountsByOwner(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{
-		"name": {"Savings"}, "owner": {"Sam, Alex, Sam"}, "kind": {"asset"}, "currency": {"CHF"},
-	})
-	post(t, srv, "/balances", url.Values{
-		"account_id": {"1"}, "amount": {"1000"}, "as_of": {"2026-01-01"},
-	})
-	post(t, srv, "/accounts", url.Values{
-		"name": {"Card"}, "owner": {"Sam"}, "kind": {"liability"}, "currency": {"CHF"},
-	})
-	post(t, srv, "/balances", url.Values{
-		"account_id": {"2"}, "amount": {"200"}, "as_of": {"2026-01-01"},
-	})
-
-	body := get(t, srv, "/")
-	overview := body[strings.Index(body, `data-widget="owners"`):]
-	overview = overview[:strings.Index(overview, "</section>")]
-	for _, want := range []string{"Total", "800.00", "Alex", "500.00", "Sam", "300.00"} {
-		if !strings.Contains(overview, want) {
-			t.Errorf("owner overview does not contain %q", want)
-		}
-	}
-	if strings.Index(overview, "Total") > strings.Index(overview, "Alex") {
-		t.Error("combined total should be displayed above the individual owners")
-	}
-
-	post(t, srv, "/accounts/1/owner", url.Values{"owner": {"Alex"}})
-	post(t, srv, "/accounts/2/owner", url.Values{"owner": {"Alex"}})
-	body = get(t, srv, "/")
-	overview = body[strings.Index(body, `data-widget="owners"`):]
-	overview = overview[:strings.Index(overview, "</section>")]
-	if strings.Contains(overview, ">Sam<") || strings.Count(overview, ">Alex<") != 1 {
-		t.Error("editing an owner should regroup the account")
 	}
 }
 
@@ -767,153 +1011,12 @@ func TestExpenseYearComparison(t *testing.T) {
 	}
 }
 
-func TestAccountTableDoesNotRepeatItsOwnCurrency(t *testing.T) {
-	srv := newTestServer(t)
-	// A CHF account: the currency selector already says CHF, so neither Cash
-	// nor Account total (also CHF) should spell out the currency again.
-	post(t, srv, "/accounts", url.Values{"name": {"Viac"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
-
-	// A EUR account: Cash stays unlabelled (the selector already says EUR),
-	// but Account total is converted to CHF and needs to say so.
-	post(t, srv, "/accounts", url.Values{"name": {"N26"}, "kind": {"asset"}, "currency": {"EUR"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"2"}, "amount": {"50"}, "as_of": {"2026-01-01"}})
-
-	body := get(t, srv, "/")
-	row := func(id string) string {
-		s := body[strings.Index(body, `data-account="`+id+`"`):]
-		return s[:strings.Index(s, "</tr>")]
-	}
-
-	if strings.Contains(row("1"), "CHF</strong>") {
-		t.Error("a CHF account should not repeat CHF next to its own values")
-	}
-	if strings.Contains(row("2"), "EUR</strong>") {
-		t.Error("cash should not repeat the account's own currency, already shown by the selector")
-	}
-	if strings.Contains(row("2"), "CHF</strong>") {
-		t.Error("the table header already identifies converted totals as CHF")
-	}
-}
-
-func TestAccountsRenderInOneTableWithInlineAddRow(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"Viac"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/accounts", url.Values{"name": {"N26"}, "kind": {"asset"}, "currency": {"EUR"}})
-
-	body := get(t, srv, "/")
-	if got := strings.Count(body, `data-widget="accounts"`); got != 1 {
-		t.Fatalf("Accounts widgets = %d, want 1", got)
-	}
-	for _, want := range []string{
-		`data-account="1"`, `data-account="2"`,
-		`id="new-account-form" method="post" action="/accounts"`,
-		`id="show-new-account"`,
-		`class="new-account-row" id="new-account-row" hidden`,
-		`form="new-account-form" name="name"`,
-		`form="new-account-form" name="bank_ref"`,
-		`action="/accounts/1/bank-ref"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("dashboard missing %q", want)
-		}
-	}
-	if strings.Contains(body, "<h3>Add an account</h3>") {
-		t.Error("account creation is still duplicated in the balance dialog")
-	}
-	if strings.Index(body, `id="new-account-row"`) > strings.Index(body, `data-account="1"`) {
-		t.Error("new account row is not at the top of the accounts table")
-	}
-	if strings.Contains(body, `data-fund=`) {
-		t.Error("fund holdings still render on the dashboard; they belong on /portfolio")
-	}
-	if strings.Contains(body, `>Record balance</button>`) {
-		t.Error("dashboard still renders the redundant Record balance button")
-	}
-}
-
-func TestAccountCanBeCreatedWithOpeningBalance(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{
-		"name": {"New bank"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"cash"},
-		"amount": {"123.45"}, "as_of": {"2026-08-26"},
-	})
-
-	body := get(t, srv, "/")
-	row := body[strings.Index(body, `data-account="1"`):]
-	row = row[:strings.Index(row, "</tr>")]
-	if !strings.Contains(row, `data-balance-account="1"`) {
-		t.Error("account total does not open balance entry")
-	}
-	if !strings.Contains(row, `data-balance-name="New bank" data-balance-currency="CHF"`) {
-		t.Error("account total is missing balance dialog context")
-	}
-	if !strings.Contains(row, "123.45") || !strings.Contains(row, "as of 2026-08-26") {
-		t.Errorf("opening balance is missing from account row: %s", row)
-	}
-	if strings.Contains(body, "No balance") {
-		t.Error("accounts table still renders No balance text")
-	}
-	if strings.Contains(body, `<select name="account_id"`) {
-		t.Error("balance dialog still allows account selection")
-	}
-	if !strings.Contains(body, `<input type="hidden" name="account_id">`) {
-		t.Error("balance dialog is missing its fixed account ID")
-	}
-	if strings.Contains(body, "Record a cash balance") || strings.Contains(body, "Save balance") {
-		t.Error("balance dialog still contains duplicated copy")
-	}
-	if strings.Contains(body, `<th class="num">Cash</th>`) {
-		t.Error("Cash column is still rendered")
-	}
-}
-
-func TestFundsCanBeUpdatedInline(t *testing.T) {
-	srv := newTestServer(t)
-	seed(t, srv)
-	body := get(t, srv, "/portfolio")
-
-	for _, want := range []string{
-		`class="fund-name" data-fund-update="1"`,
-		`class="fund-update-row" id="fund-update-1" hidden`,
-		`action="/fund-updates" class="inline-fund-update"`,
-		`name="fund_id" value="1"`,
-		`id="new-fund-row" class="inline-new-fund" method="post" action="/funds"`,
-		`id="show-new-fund"`,
-		`class="icon close-new-fund"`,
-		`action="/trades/import"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("portfolio page missing %q", want)
-		}
-	}
-	if !strings.HasSuffix(strings.TrimSpace(body), "</html>") {
-		t.Error("portfolio page was truncated")
-	}
-}
-
-func TestFundCanBeCreatedInlineWithInitialHolding(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"Broker"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/funds", url.Values{
-		"account_id": {"1"}, "name": {"World ETF"}, "ticker": {"vwce"}, "currency": {"CHF"},
-		"class": {"stocks"}, "units": {"10"}, "price": {"87.40"}, "as_of": {"2026-08-26"},
-	})
-
-	body := get(t, srv, "/portfolio")
-	for _, want := range []string{"World ETF", "VWCE", "87.40", "874.00", `data-fund-update="1"`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("new fund is missing %q", want)
-		}
-	}
-}
-
 func TestChartsAreNeverEmptyLines(t *testing.T) {
 	srv := newTestServer(t)
 	seed(t, srv)
 
 	// A single point would draw an invisible polyline; every chart needs two.
-	for _, path := range []string{"/", "/portfolio", "/retire"} {
+	for _, path := range []string{"/retire"} {
 		for _, line := range chartLines(get(t, srv, path)) {
 			if strings.Count(line, ",") < 2 {
 				t.Errorf("%s has a polyline with fewer than two points: %q", path, line)
@@ -949,17 +1052,6 @@ func chartLines(body string) []string {
 	return out
 }
 
-func TestRatesAPIServesPairs(t *testing.T) {
-	srv := newTestServer(t)
-
-	body := get(t, srv, "/api/rates")
-	for _, pair := range []string{"USD/CHF", "EUR/USD", "CHF/EUR"} {
-		if !strings.Contains(body, pair) {
-			t.Errorf("rates API does not quote %s: %s", pair, body)
-		}
-	}
-}
-
 func TestCrossSitePostIsRejected(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -967,8 +1059,8 @@ func TestCrossSitePostIsRejected(t *testing.T) {
 		{"Sec-Fetch-Site", "cross-site"},
 		{"Origin", "http://evil.example"},
 	} {
-		req := httptest.NewRequest(http.MethodPost, "/accounts",
-			strings.NewReader("name=Sneaky&kind=asset&currency=CHF"))
+		req := httptest.NewRequest(http.MethodPost, "/expenses",
+			strings.NewReader("amount=1&currency=CHF&new_category=Test&as_of=2026-01-01"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set(header.name, header.value)
 
@@ -1158,114 +1250,6 @@ func TestSavingsFeedTheRetirementPlan(t *testing.T) {
 	}
 }
 
-func TestFixAccountCurrency(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"UBS Main"}, "kind": {"asset"}, "currency": {"EUR"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
-
-	if page := get(t, srv, "/"); !strings.Contains(page, "100.00 EUR") {
-		t.Fatal("account was not created in EUR")
-	}
-
-	post(t, srv, "/accounts/1/currency", url.Values{"currency": {"CHF"}})
-
-	page := get(t, srv, "/")
-	if strings.Contains(page, "100.00 EUR") {
-		t.Error("account is still shown in EUR")
-	}
-	if !strings.Contains(page, "100.00 CHF") {
-		t.Error("account was not relabelled to CHF")
-	}
-}
-
-func TestResetDashboardChangeUntilNextEntry(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"UBS"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"150"}, "as_of": {"2026-02-01"}})
-
-	if page := get(t, srv, "/"); !strings.Contains(page, "since last entry") {
-		t.Fatal("dashboard did not show a change before reset")
-	}
-
-	post(t, srv, "/dashboard/change/reset", nil)
-	if page := get(t, srv, "/"); strings.Contains(page, "since last entry") {
-		t.Fatal("dashboard still showed the dismissed change")
-	}
-
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"175"}, "as_of": {"2026-03-01"}})
-	if page := get(t, srv, "/"); !strings.Contains(page, "since last entry") {
-		t.Fatal("dashboard did not show the change after a newer entry")
-	}
-}
-
-func TestDashboardResetKeepsTheWholeChartHistory(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"UBS"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"100"}, "as_of": {"2026-01-01"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"150"}, "as_of": {"2026-02-01"}})
-	post(t, srv, "/dashboard/change/reset", nil)
-
-	// Dismissing the change badge must not cut the trend down to one point.
-	page := get(t, srv, "/")
-	if !strings.Contains(page, "2026-01-01") {
-		t.Error("the chart lost the history before the dismissed change")
-	}
-}
-
-func TestNetWorthCurrencyConversion(t *testing.T) {
-	if got, ok := inCurrency(10000, 0.8); !ok || got != 12500 {
-		t.Errorf("inCurrency(100 CHF, 0.8) = %s, %v; want 125.00, true", got, ok)
-	}
-	if got, ok := inCurrency(-10000, 0.8); !ok || got != -12500 {
-		t.Errorf("inCurrency(-100 CHF, 0.8) = %s, %v; want -125.00, true", got, ok)
-	}
-	if _, ok := inCurrency(10000, 0); ok {
-		t.Error("inCurrency with a missing rate reported success")
-	}
-}
-
-func TestAccountClassMovesBalanceOutOfLiquidity(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"Viac"}, "kind": {"asset"}, "currency": {"CHF"}})
-	post(t, srv, "/balances", url.Values{"account_id": {"1"}, "amount": {"5000"}, "as_of": {"2026-01-01"}})
-
-	// A plain cash balance defaults to the liquid "cash" class.
-	page := get(t, srv, "/")
-	if !strings.Contains(page, "5,000.00") || !strings.Contains(page, "Liquid") {
-		t.Fatal("balance was not shown as liquid cash")
-	}
-
-	// Viac is a pension held entirely in stocks: reclassify it.
-	post(t, srv, "/accounts/1/class", url.Values{"class": {"stocks"}})
-
-	page = get(t, srv, "/")
-	if !strings.Contains(page, `class="pill class-stocks"`) {
-		t.Error("account was not relabelled to stocks")
-	}
-	if !strings.Contains(page, "Not liquid") || !strings.Contains(page, "5,000.00") {
-		t.Error("reclassified balance did not move into the not-liquid bucket")
-	}
-}
-
-func TestFundClassGroupsAllocation(t *testing.T) {
-	srv := newTestServer(t)
-	seed(t, srv)
-
-	// seed() creates fund 1 as an ETF, which defaults to the "stocks" class.
-	page := get(t, srv, "/")
-	if !strings.Contains(page, `class="pill class-stocks"`) {
-		t.Fatal("fund was not created with the default stocks class")
-	}
-
-	post(t, srv, "/funds/1/class", url.Values{"class": {"bonds"}})
-
-	page = get(t, srv, "/")
-	if !strings.Contains(page, `class="pill class-bonds"`) {
-		t.Error("fund was not relabelled to bonds")
-	}
-}
-
 func TestDeleteMonthClearsOnlyThatMonth(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -1430,8 +1414,8 @@ func TestCategoryRuleCanBeEditedAndShowsMatchCount(t *testing.T) {
 func TestBadInputRedirectsWithMessage(t *testing.T) {
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/balances",
-		strings.NewReader("account_id=1&amount=not-a-number"))
+	req := httptest.NewRequest(http.MethodPost, "/expenses",
+		strings.NewReader("amount=not-a-number&currency=CHF&new_category=Test&as_of=2026-01-01"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	rec := httptest.NewRecorder()
@@ -1442,141 +1426,5 @@ func TestBadInputRedirectsWithMessage(t *testing.T) {
 	}
 	if location := rec.Header().Get("Location"); !strings.Contains(location, "err=") {
 		t.Errorf("Location = %q, want an error message", location)
-	}
-}
-
-const degiroExport = `Data,Ora,Prodotto,ISIN,Borsa di riferimento,Borsa,Quantità,Quotazione,,Valore locale,,Valore CHF,Tasso di cambio,Commissione AutoFX,Costi di transazione e/o di terze parti CHF,Totale CHF,ID Ordine
-03-01-2025,09:00,ISHARES CORE MSCI WORLD UCITS ETF USD (ACC),IE00B4L5Y983,SWX,XSWX,20,107.8600,USD,-2157.20,USD,-1963.54,1.0986,-4.91,-2.81,-1971.26,75e46ce3
-28-07-2026,09:38,AMUNDI CORE STOXX EUROPE 600 UCITS ETF A,LU0908500753,TDG,XGAT,10,317.8000,EUR,-3178.00,EUR,-2961.28,1.0732,-7.40,-0.93,-2969.61,99da5abc
-`
-
-// uploadTrades posts a broker export to an account the way its form does.
-func uploadTrades(t *testing.T, srv *Server, accountID int64, csv string) string {
-	t.Helper()
-
-	var body bytes.Buffer
-	form := multipart.NewWriter(&body)
-	form.WriteField("account_id", fmt.Sprint(accountID))
-	part, err := form.CreateFormFile("file", "Transactions.csv")
-	if err != nil {
-		t.Fatalf("build upload: %v", err)
-	}
-	io.WriteString(part, csv)
-	form.Close()
-
-	req := httptest.NewRequest(http.MethodPost, "/trades/import", &body)
-	req.Header.Set("Content-Type", form.FormDataContentType())
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("import returned %d, want 303", rec.Code)
-	}
-	return rec.Header().Get("Location")
-}
-
-func TestImportingABrokerExportRebuildsAnAccountsFunds(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{
-		"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"stocks"},
-	})
-	ledger, err := srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	accountID := ledger.Accounts[0].ID
-
-	if location := uploadTrades(t, srv, accountID, degiroExport); !strings.Contains(location, "Imported+2+trades") {
-		t.Errorf("Location = %q, want a two-trade notice", location)
-	}
-	if location := uploadTrades(t, srv, accountID, degiroExport); !strings.Contains(location, "already+recorded") {
-		t.Errorf("re-import Location = %q, want the duplicates to be reported", location)
-	}
-
-	page := get(t, srv, "/portfolio")
-	for _, want := range []string{"ISHARES CORE MSCI WORLD UCITS ETF USD (ACC)", "IE00B4L5Y983", "AMUNDI CORE STOXX EUROPE 600 UCITS ETF A"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("portfolio page does not show %q", want)
-		}
-	}
-	if !strings.HasSuffix(strings.TrimSpace(page), "</html>") {
-		t.Error("dashboard was truncated")
-	}
-}
-
-func TestFetchingAFundsPriceHistoryFillsInTheChart(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{
-		"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}, "class": {"stocks"},
-	})
-	ledger, err := srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	uploadTrades(t, srv, ledger.Accounts[0].ID, degiroExport)
-
-	ledger, err = srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var world store.Fund
-	for _, fund := range ledger.Funds {
-		if fund.Currency == "USD" {
-			world = fund
-		}
-	}
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/funds/%d/prices/fetch", world.ID), nil)
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("fetch returned %d, want 303", rec.Code)
-	}
-	// The export already holds a trade on the first of the two stubbed days, and
-	// a trade's own price is never overwritten by a fetch.
-	if location := rec.Header().Get("Location"); !strings.Contains(location, "1+daily+price+from+TEST.L") {
-		t.Errorf("Location = %q, want the fetched prices to be reported", location)
-	}
-
-	ledger, err = srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fund := range ledger.Funds {
-		if fund.ID == world.ID && fund.Symbol != "TEST.L" {
-			t.Errorf("fund symbol = %q, want TEST.L", fund.Symbol)
-		}
-	}
-	// Fetched marks are history, not activity: they must not flood the list.
-	for _, entry := range ledger.Entries(50) {
-		if entry.Kind == "price" {
-			t.Errorf("fetched price shows up as an entry: %+v", entry)
-		}
-	}
-	if page := get(t, srv, "/"); !strings.HasSuffix(strings.TrimSpace(page), "</html>") {
-		t.Error("dashboard was truncated")
-	}
-}
-
-func TestFetchingPricesReportsACurrencyMismatch(t *testing.T) {
-	srv := newTestServer(t)
-	post(t, srv, "/accounts", url.Values{"name": {"Degiro"}, "kind": {"asset"}, "currency": {"CHF"}})
-	ledger, err := srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	post(t, srv, "/funds", url.Values{
-		"account_id": {fmt.Sprint(ledger.Accounts[0].ID)}, "name": {"Euro fund"},
-		"ticker": {"LU0908500753"}, "currency": {"EUR"},
-	})
-	ledger, err = srv.store.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/funds/%d/prices/fetch", ledger.Funds[0].ID), nil)
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-	if location := rec.Header().Get("Location"); !strings.Contains(location, "err=") {
-		t.Errorf("Location = %q, want an error about the missing EUR listing", location)
 	}
 }

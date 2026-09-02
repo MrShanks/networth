@@ -2,18 +2,13 @@
 package web
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
-	"slices"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -44,7 +39,7 @@ func absAmount(amount money.Amount) money.Amount {
 
 func subAmount(a, b money.Amount) money.Amount { return a - b }
 
-func NewServer(s *store.Store, rates *fx.Client, quotes *prices.Client, log *slog.Logger) (*Server, error) {
+func NewServer(s *store.Store, rates *fx.Client, priceClient *prices.Client, log *slog.Logger) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"spark":      sparkPoints,
 		"trend":      sparkAmounts,
@@ -59,7 +54,7 @@ func NewServer(s *store.Store, rates *fx.Client, quotes *prices.Client, log *slo
 		return nil, err
 	}
 
-	srv := &Server{store: s, fx: rates, prices: quotes, tmpl: tmpl, log: log, mux: http.NewServeMux()}
+	srv := &Server{store: s, fx: rates, prices: priceClient, tmpl: tmpl, log: log, mux: http.NewServeMux()}
 	srv.routes()
 	return srv, nil
 }
@@ -92,26 +87,16 @@ func (s *Server) routes() {
 		w.Header().Set("Cache-Control", "no-cache")
 		static.ServeHTTP(w, r)
 	}))
-	s.mux.HandleFunc("GET /{$}", s.handleDashboard)
-	s.mux.HandleFunc("GET /portfolio", s.handlePortfolio)
-	s.mux.HandleFunc("POST /dashboard/change/reset", s.handleResetDashboardChange)
-	s.mux.HandleFunc("POST /accounts", s.handleCreateAccount)
-	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteAccount)
-	s.mux.HandleFunc("POST /accounts/{id}/currency", s.handleSetAccountCurrency)
-	s.mux.HandleFunc("POST /accounts/{id}/owner", s.handleSetAccountOwner)
-	s.mux.HandleFunc("POST /accounts/{id}/bank-ref", s.handleSetAccountBankRef)
-	s.mux.HandleFunc("POST /accounts/{id}/class", s.handleSetAccountClass)
-	s.mux.HandleFunc("POST /trades/import", s.handleImportTrades)
-	s.mux.HandleFunc("POST /funds", s.handleCreateFund)
-	s.mux.HandleFunc("POST /funds/{id}/delete", s.handleDeleteFund)
-	s.mux.HandleFunc("POST /funds/{id}/class", s.handleSetFundClass)
-	s.mux.HandleFunc("POST /funds/{id}/prices/fetch", s.handleFetchPrices)
-	s.mux.HandleFunc("POST /balances", s.handleSetBalance)
-	s.mux.HandleFunc("POST /balances/{id}/delete", s.handleDeleteBalance)
-	s.mux.HandleFunc("POST /fund-updates", s.handleFundUpdate)
-	s.mux.HandleFunc("POST /trades/{id}/delete", s.handleDeleteTrade)
-	s.mux.HandleFunc("POST /prices/{id}/delete", s.handleDeletePrice)
-	s.mux.HandleFunc("GET /api/rates", s.handleRatesAPI)
+	s.mux.HandleFunc("GET /{$}", s.handleWorkspace)
+	s.mux.HandleFunc("POST /accounts", s.handleCreateWorkspaceAccount)
+	s.mux.HandleFunc("POST /accounts/{id}", s.handleSetWorkspaceAccountDetails)
+	s.mux.HandleFunc("POST /balances", s.handleSetWorkspaceBalance)
+	s.mux.HandleFunc("POST /accounts/{id}/balances", s.handleSetWorkspaceBalance)
+	s.mux.HandleFunc("POST /balances/import", s.handleImportWorkspaceBalances)
+	s.mux.HandleFunc("GET /investments", s.handleInvestments)
+	s.mux.HandleFunc("POST /investments/import", s.handleImportInvestments)
+	s.mux.HandleFunc("POST /investments/trades", s.handleAddInvestmentTrade)
+	s.mux.HandleFunc("POST /investments/prices", s.handleRefreshInvestmentPrices)
 	s.mux.HandleFunc("GET /expenses", s.handleExpenses)
 	s.mux.HandleFunc("GET /expenses/year", s.handleYearExpenses)
 	s.mux.HandleFunc("GET /expenses/all", s.handleAllExpenses)
@@ -147,393 +132,11 @@ func dict(pairs ...any) (map[string]any, error) {
 	return out, nil
 }
 
-type dashboardData struct {
-	Base         string
-	Currencies   []string
-	AssetClasses []string
-	Now          store.Valuation
-	Owners       []ownerTotal
-	Allocation   store.Allocation
-	Liquidity    store.Liquidity
-	NetWorthEUR  money.Amount
-	NetWorthUSD  money.Amount
-	HasEUR       bool
-	HasUSD       bool
-	Change       money.Amount
-	HasChange    bool
-	Accounts     []store.Account
-	Funds        []store.Fund
-	Entries      []store.Entry
-	FX           fxView
-	MissingRates []string
-	Chart        Chart
-	Today        string
-	Notice       string
-	Error        string
-}
-
-type ownerTotal struct {
-	Name  string
-	Total money.Amount
-}
-
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	v, err := s.load(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	ledger := v.ledger
-
-	history := ledger.NetWorthHistory()
-	entryHistory := ledger.History()
-	reset, err := s.store.DashboardChangeReset(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	now := ledger.At("")
-	data := dashboardData{
-		Base:         store.Base,
-		Currencies:   store.Currencies,
-		AssetClasses: store.AssetClasses,
-		Now:          now,
-		Owners:       ownerTotals(now),
-		Allocation:   now.Allocation(),
-		Liquidity:    now.Liquidity(),
-		Accounts:     ledger.Accounts,
-		Funds:        ledger.Funds,
-		Entries:      ledger.Entries(50),
-		FX:           v.fx,
-		MissingRates: ledger.MissingRates(),
-		Chart:        buildChart(history),
-		Today:        time.Now().Format("2006-01-02"),
-		Notice:       r.URL.Query().Get("msg"),
-		Error:        r.URL.Query().Get("err"),
-	}
-	data.NetWorthEUR, data.HasEUR = inCurrency(now.NetWorth(), ledger.Rates["EUR"])
-	data.NetWorthUSD, data.HasUSD = inCurrency(now.NetWorth(), ledger.Rates["USD"])
-	if n := len(entryHistory); n >= 2 {
-		if entryHistory[n-1].Date > reset {
-			data.Change = entryHistory[n-1].NetWorth() - entryHistory[n-2].NetWorth()
-			data.HasChange = true
-		}
-	}
-
-	s.render(w, "dashboard.html", data)
-}
-
-func ownerTotals(v store.Valuation) []ownerTotal {
-	totals := make(map[string]money.Amount)
-	for _, account := range v.Accounts {
-		owners := ownerNames(account.Owner)
-		value := account.ValueBase
-		if account.IsLiability() {
-			value = -value
-		}
-		share, remainder := value/money.Amount(len(owners)), value%money.Amount(len(owners))
-		for i, owner := range owners {
-			totals[owner] += share
-			if money.Amount(i) < remainder {
-				totals[owner]++
-			} else if money.Amount(-i) > remainder {
-				totals[owner]--
-			}
-		}
-	}
-	owners := make([]ownerTotal, 0, len(totals))
-	for name, total := range totals {
-		owners = append(owners, ownerTotal{Name: name, Total: total})
-	}
-	slices.SortFunc(owners, func(a, b ownerTotal) int { return strings.Compare(a.Name, b.Name) })
-	return owners
-}
-
-func ownerNames(raw string) []string {
-	seen := make(map[string]bool)
-	var owners []string
-	for _, part := range strings.Split(raw, ",") {
-		owner := strings.TrimSpace(part)
-		if owner != "" && !seen[owner] {
-			owners = append(owners, owner)
-			seen[owner] = true
-		}
-	}
-	if len(owners) == 0 {
-		return []string{"Unassigned"}
-	}
-	slices.Sort(owners)
-	return owners
-}
-
-func normalizeOwners(raw string) string {
-	owners := ownerNames(raw)
-	if len(owners) == 1 && owners[0] == "Unassigned" {
-		return ""
-	}
-	return strings.Join(owners, ", ")
-}
-
-func inCurrency(chf money.Amount, chfPerUnit float64) (money.Amount, bool) {
-	if chfPerUnit <= 0 {
-		return 0, false
-	}
-	return money.Amount(math.Round(float64(chf) / chfPerUnit)), true
-}
-
-func (s *Server) handleResetDashboardChange(w http.ResponseWriter, r *http.Request) {
-	v, err := s.load(r.Context())
-	if err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	history := v.ledger.History()
-	if len(history) > 0 {
-		if err := s.store.SetDashboardChangeReset(r.Context(), history[len(history)-1].Date); err != nil {
-			s.redirect(w, r, err.Error())
-			return
-		}
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		s.redirect(w, r, "name is required")
-		return
-	}
-	class := r.FormValue("class")
-	if class == "" {
-		class = store.ClassCash
-	}
-	var openingBalance *money.Amount
-	if raw := strings.TrimSpace(r.FormValue("amount")); raw != "" {
-		amount, err := money.Parse(raw)
-		if err != nil {
-			s.redirect(w, r, "opening balance must look like 1234.56")
-			return
-		}
-		openingBalance = &amount
-	}
-	err := s.store.CreateAccount(r.Context(), name, normalizeOwners(r.FormValue("owner")), r.FormValue("bank_ref"), r.FormValue("kind"),
-		r.FormValue("currency"), class, s.date(r), openingBalance)
-	if err != nil {
-		s.redirect(w, r, "could not add account: "+err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleSetAccountBankRef(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := s.store.SetAccountBankRef(r.Context(), id, r.FormValue("bank_ref")); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleSetAccountOwner(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := s.store.SetAccountOwner(r.Context(), id, normalizeOwners(r.FormValue("owner"))); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleSetAccountClass(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := s.store.SetAccountClass(r.Context(), id, r.FormValue("class")); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleCreateFund(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(r.FormValue("account_id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "pick an account to hold the fund")
-		return
-	}
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		s.redirect(w, r, "fund name is required")
-		return
-	}
-	ticker := strings.ToUpper(strings.TrimSpace(r.FormValue("ticker")))
-	class := r.FormValue("class")
-	if class == "" {
-		class = store.ClassStocks
-	}
-	var initialPrice *money.Amount
-	var units float64
-	priceRaw := strings.TrimSpace(r.FormValue("price"))
-	unitsRaw := strings.TrimSpace(r.FormValue("units"))
-	if priceRaw != "" || unitsRaw != "" {
-		if priceRaw == "" || unitsRaw == "" {
-			s.redirect(w, r, "initial units and price are both required")
-			return
-		}
-		price, err := money.Parse(priceRaw)
-		if err != nil {
-			s.redirect(w, r, "price must look like 87.40")
-			return
-		}
-		units, err = parseFloat(unitsRaw)
-		if err != nil {
-			s.redirect(w, r, "units must be a number, e.g. 12.5")
-			return
-		}
-		initialPrice = &price
-	}
-
-	if err := s.store.CreateFund(r.Context(), accountID, name, ticker, r.FormValue("currency"), class,
-		s.date(r), units, initialPrice); err != nil {
-		s.redirect(w, r, "could not add fund: "+err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleSetFundClass(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := s.store.SetFundClass(r.Context(), id, r.FormValue("class")); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(r.FormValue("account_id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "pick an account first")
-		return
-	}
-	amount, err := money.Parse(r.FormValue("amount"))
-	if err != nil {
-		s.redirect(w, r, "amount must look like 1234.56")
-		return
-	}
-	if err := s.store.SetBalance(r.Context(), accountID, s.date(r), amount); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-// handleFundUpdate records a new price for a fund and, when units are given,
-// the trade that went with it.
-func (s *Server) handleFundUpdate(w http.ResponseWriter, r *http.Request) {
-	fundID, err := strconv.ParseInt(r.FormValue("fund_id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "pick a fund first")
-		return
-	}
-	price, err := money.Parse(r.FormValue("price"))
-	if err != nil {
-		s.redirect(w, r, "price must look like 87.40")
-		return
-	}
-
-	raw := strings.TrimSpace(r.FormValue("units"))
-	if raw == "" {
-		if err := s.store.SetPrice(r.Context(), fundID, s.date(r), price); err != nil {
-			s.redirect(w, r, err.Error())
-			return
-		}
-		s.redirect(w, r, "")
-		return
-	}
-
-	units, err := parseFloat(raw)
-	if err != nil {
-		s.redirect(w, r, "units must be a number, e.g. 12.5 or -4 to sell")
-		return
-	}
-	if err := s.store.AddTrade(r.Context(), fundID, s.date(r), units, price); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, s.store.DeleteAccount)
-}
-
-// handleSetAccountCurrency relabels an account's currency; it does not convert
-// the balance already stored, only how it is read from now on.
-func (s *Server) handleSetAccountCurrency(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := s.store.SetAccountCurrency(r.Context(), id, r.FormValue("currency")); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
-func (s *Server) handleDeleteFund(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, s.store.DeleteFund)
-}
-
-func (s *Server) handleDeleteBalance(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, s.store.DeleteBalance)
-}
-
-func (s *Server) handleDeleteTrade(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, s.store.DeleteTrade)
-}
-
-func (s *Server) handleDeletePrice(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, s.store.DeletePrice)
-}
-
-func (s *Server) withID(w http.ResponseWriter, r *http.Request, fn func(context.Context, int64) error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		s.redirect(w, r, "invalid id")
-		return
-	}
-	if err := fn(r.Context(), id); err != nil {
-		s.redirect(w, r, err.Error())
-		return
-	}
-	s.redirect(w, r, "")
-}
-
 func (s *Server) date(r *http.Request) string {
-	if d := r.FormValue("as_of"); d != "" {
-		return d
+	if date := r.FormValue("as_of"); date != "" {
+		return date
 	}
 	return time.Now().Format("2006-01-02")
-}
-
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(s), ",", ""), 64)
 }
 
 // redirect sends the browser back to the page the form was submitted from,
@@ -543,7 +146,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request, errMsg string)
 }
 
 // origin is the page a form was posted from, so acting on a fund does not
-// bounce the reader to the dashboard from wherever they were.
+// bounce the reader back to the page the form came from.
 func (s *Server) origin(r *http.Request) string {
 	referer, err := url.Parse(r.Referer())
 	if err != nil || referer.Path == "" || (referer.Host != "" && referer.Host != r.Host) {

@@ -204,25 +204,3 @@ func TestHistoryCarriesLastKnownValueForward(t *testing.T) {
 		t.Errorf("net worth change = %s, want %s", got, want)
 	}
 }
-
-func TestNetWorthHistoryUsesCurrentBalancesAsHistoricalBaseline(t *testing.T) {
-	l := testLedger()
-	l.NetWorthBaseline = "2026-02-01"
-	l.cash[1] = append(l.cash[1], CashPoint{AsOf: "2026-02-01", Amount: 80000})
-	l.cash[2] = append(l.cash[2], CashPoint{AsOf: "2026-02-01", Amount: 9_000_00})
-	l.prices[1] = []PriceMark{
-		{AsOf: "2026-02-01", Price: 12000},
-		{AsOf: "2026-03-01", Price: 13000},
-	}
-
-	history := l.NetWorthHistory()
-	if got, want := len(history), 3; got != want {
-		t.Fatalf("NetWorthHistory() has %d points, want %d", got, want)
-	}
-	if got, want := history[0].NetWorth(), money.Amount(-545000); got != want {
-		t.Errorf("January net worth = %s, want %s", got, want)
-	}
-	if got, want := history[2].NetWorth()-history[1].NetWorth(), money.Amount(10000); got != want {
-		t.Errorf("post-baseline change = %s, want %s", got, want)
-	}
-}

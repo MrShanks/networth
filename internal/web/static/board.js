@@ -2,8 +2,8 @@
 // remembered per browser, separately for each page.
 (async function () {
   const pages = {
-    overview: { label: 'Overview', path: '/' },
-    portfolio: { label: 'Portfolio', path: '/portfolio' },
+    workspace: { label: 'Workspace', path: '/' },
+    investments: { label: 'Investments', path: '/investments' },
     expenses: { label: 'Expenses', path: '/expenses' },
     transactions: { label: 'Transactions', path: '/transactions' },
     graphs: { label: 'Graphs', path: '/graphs' },
@@ -11,18 +11,28 @@
     retirement: { label: 'Retirement', path: '/retire' },
   };
   const pageOf = (path) => path.startsWith('/expenses') ? 'expenses'
-    : path === '/' ? 'overview'
+    : path === '/' ? 'workspace'
       : path === '/retire' ? 'retirement'
         : path.slice(1);
   const page = pageOf(location.pathname);
   const placementsKey = 'networth.widget.placements';
-  const KEY = 'networth.board.' + location.pathname;
+  const KEY = page === 'workspace' ? 'networth.board.workspace' : 'networth.board.' + location.pathname;
   const board = document.getElementById('board');
   if (!board) return;
 
+  localStorage.removeItem('networth.board./');
+  localStorage.removeItem('networth.board./portfolio');
+  localStorage.removeItem('networth.accounts.order');
+
   function loadPlacements() {
     try {
-      return JSON.parse(localStorage.getItem(placementsKey)) || {};
+      const placements = JSON.parse(localStorage.getItem(placementsKey)) || {};
+      for (const [key, placement] of Object.entries(placements)) {
+        if (['overview', 'portfolio'].includes(placement.destination)
+          || ['overview', 'portfolio'].includes(placement.home)) delete placements[key];
+      }
+      localStorage.setItem(placementsKey, JSON.stringify(placements));
+      return placements;
     } catch (e) {
       return {};
     }
@@ -33,7 +43,8 @@
     return {
       collapsed: widget.classList.contains('collapsed'),
       span: Number(widget.dataset.span) || 1,
-      title: title?.textContent.trim() || title?.dataset.defaultTitle || '',
+      title: widget.hasAttribute('data-dynamic-title')
+        ? '' : title?.textContent.trim() || title?.dataset.defaultTitle || '',
     };
   }
 
@@ -162,7 +173,8 @@
         widgets().filter((w) => w.dataset.column).map((w) => [idOf(w), Number(w.dataset.column)])), present),
       titles: keptFor(previous.titles, Object.fromEntries(widgets().map((w) => {
         const title = w.querySelector('[data-widget-title]');
-        return [idOf(w), title?.textContent.trim() || title?.dataset.defaultTitle || ''];
+        return [idOf(w), w.hasAttribute('data-dynamic-title')
+          ? '' : title?.textContent.trim() || title?.dataset.defaultTitle || ''];
       })), present),
       widgetKeys: true,
     };
@@ -191,7 +203,9 @@
       if (byID.has(id)) byID.get(id).dataset.column = column;
     });
     Object.entries(state.titles || {}).forEach(([id, value]) => {
-      const title = byID.get(id)?.querySelector('[data-widget-title]');
+      const widget = byID.get(id);
+      const title = widget?.querySelector('[data-widget-title]');
+      if (widget?.hasAttribute('data-dynamic-title')) return;
       if (title && String(value).trim()) title.textContent = String(value).trim();
     });
 
@@ -397,56 +411,6 @@
   });
 
   board.addEventListener('drop', (e) => e.preventDefault());
-
-  const accountsBody = board.querySelector('.accounts-table > tbody');
-  if (accountsBody) {
-    const orderKey = 'networth.accounts.order';
-    const accountRows = () => [...accountsBody.querySelectorAll(':scope > .account-row')];
-    const fundRow = (row) => row.nextElementSibling?.classList.contains('account-funds')
-      ? row.nextElementSibling
-      : null;
-    const moveGroupBefore = (row, before) => {
-      const funds = fundRow(row);
-      if (before === row || before === funds) return;
-      accountsBody.insertBefore(row, before);
-      if (funds) accountsBody.insertBefore(funds, before);
-    };
-
-    try {
-      const byID = new Map(accountRows().map((row) => [row.dataset.account, row]));
-      const saved = JSON.parse(localStorage.getItem(orderKey) || '[]').map(String);
-      const savedIDs = new Set(saved);
-      const ordered = saved.map((id) => byID.get(id)).filter(Boolean)
-        .concat(accountRows().filter((row) => !savedIDs.has(row.dataset.account)));
-      ordered.forEach((row) => moveGroupBefore(row, null));
-    } catch (e) {
-      // Ignore invalid saved layout and use the server order.
-    }
-
-    let draggedAccount = null;
-    accountsBody.addEventListener('dragstart', (e) => {
-      if (!e.target.closest('.account-grip')) return;
-      draggedAccount = e.target.closest('.account-row');
-      draggedAccount.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', draggedAccount.dataset.account);
-    });
-    accountsBody.addEventListener('dragover', (e) => {
-      if (!draggedAccount) return;
-      const target = e.target.closest('.account-row');
-      if (!target || target === draggedAccount) return;
-      e.preventDefault();
-      const before = e.clientY < target.getBoundingClientRect().top + target.offsetHeight / 2;
-      moveGroupBefore(draggedAccount, before ? target : fundRow(target)?.nextElementSibling || target.nextElementSibling);
-    });
-    accountsBody.addEventListener('dragend', () => {
-      if (!draggedAccount) return;
-      draggedAccount.classList.remove('dragging');
-      draggedAccount = null;
-      localStorage.setItem(orderKey, JSON.stringify(accountRows().map((row) => row.dataset.account)));
-      layout();
-    });
-  }
 
   restore();
   layout(true);

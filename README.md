@@ -1,22 +1,20 @@
 # networth
 
-A small self-hosted web app for tracking your net worth over time.
+A small self-hosted personal-finance app.
 
-You define **accounts** — a bank account, a broker such as Degiro, a mortgage —
-and record what they are worth over time. An account holds a cash balance, any
-number of **funds** (ETFs), or both. The dashboard values everything with the
-latest data on or before today and plots the net worth history.
+The current interface focuses on transactions, expenses, graphs, records, and
+retirement planning. The root route is an empty widget workspace. The previous
+Overview and Portfolio interfaces were deliberately removed so Portfolio can be
+rebuilt from a clean starting point.
 
-## Funds
+## Financial model
 
-Funds are tracked with two kinds of entry, both recorded from the same form:
+The retained model supports asset and liability accounts, dated balances, and
+funds held inside accounts. Funds have two kinds of entry:
 
 - a **trade** — units bought or sold and the price you paid, which is what fixes
   the cost basis;
 - a **price** — what a unit is worth on a date, to mark the holding to market.
-
-Leave the units field empty to record a price on its own; a trade always sets
-the price for its day as well.
 
 Buying more of a fund you already own is just another trade: it raises the
 amount invested rather than showing up as growth.
@@ -26,9 +24,10 @@ amount invested rather than showing up as growth.
 - **Gain** is the current market value minus that, plus anything realized on a
   sale.
 
-The dashboard charts market value against money paid in, so a contribution shows
-as a step in the invested line while the gap between the two lines is growth.
-Each fund keeps its figures in its own currency; only the totals are converted.
+Each fund keeps its figures in its own currency; aggregate values are converted
+to CHF. This model, the DEGIRO importer, and historical price fetching remain
+available for the new Portfolio implementation, but currently have no
+management UI.
 
 ## Expenses
 
@@ -107,34 +106,15 @@ you drew it down — under three scenarios:
 The last two are configurable: how many more months you work, and what the
 passion project brings in.
 
-## Liquidity and asset allocation
-
-Every account and fund has an **asset class** — Cash, Stocks, Bonds or Other —
-shown as a pill you can change right on the dashboard, next to the currency
-pill. It defaults to Cash for accounts and Stocks for funds, which is right
-for a checking account or an ETF, but not for everything: a pension held
-entirely in equities, for example, is still just a cash balance in the app, so
-mark that account Stocks and its balance is treated as invested rather than
-liquid.
-
-The **Liquidity** panels in Summary split net worth into what is sitting in a
-plain cash account and what is invested, using that classification. The
-**Asset allocation** widget breaks the same total down by class, so
-reclassifying an account or a fund updates the dashboard immediately.
-
 ## Currencies
 
 Everything is reported in **CHF**. Accounts and funds can be held in CHF, EUR or
 USD, and non-CHF amounts are converted at the current exchange rate — including
-the historical points on the chart, so the whole curve is expressed in today's
-CHF. An account's currency pill on the dashboard is a dropdown: pick a different
-currency to relabel the account, for example if it was created wrong — this
-only changes how the stored balance is read, it does not convert the number.
+historical aggregate points.
 
 Rates come from the [Frankfurter](https://frankfurter.dev) API (daily ECB
 reference rates, no API key), are refetched at most every 15 minutes, and are
-cached in the database so the app keeps working offline. The dashboard shows
-USD/CHF, EUR/USD and CHF/EUR and refreshes them in place every minute.
+cached in the database so the app keeps working offline.
 
 ## Run
 
