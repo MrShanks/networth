@@ -696,8 +696,12 @@ dialog.modal::backdrop {
 }
 .account-editor[open] summary::after { transform: translateY(-50%) rotate(90deg); }
 .account-editor summary { position: relative; padding-right: 1.25rem; }
-.account-inline-form { display: flex; gap: 0.3rem; margin-top: 0.3rem; }
+.account-inline-form { display: grid; grid-template-columns: 1fr auto; gap: 0.3rem; margin-top: 0.3rem; }
 .account-inline-form label { min-width: 0; }
+.account-inline-form .account-name-field { grid-column: 1 / -1; }
+.account-inline-form input { width: 100%; min-height: 1.65rem; padding: 0.12rem 0.35rem; font-size: 0.72rem; }
+.account-delete-form { margin-top: 0.35rem; }
+.account-delete-form button { width: 100%; min-height: 1.65rem; padding: 0.12rem 0.45rem; font-size: 0.68rem; }
 .balance-editor { position: relative; }
 .balance-editor summary {
   cursor: pointer;

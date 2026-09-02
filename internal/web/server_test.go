@@ -334,19 +334,35 @@ func TestWorkspaceUpdatesAccountCurrencyAndAssetClassInline(t *testing.T) {
 		"month": {"2026-08"}, "balance": {"100.00"},
 	})
 	post(t, srv, "/accounts/1", url.Values{
-		"currency": {"EUR"}, "asset_class": {"stocks_bonds"},
+		"name": {"Long-term Brokerage"}, "currency": {"EUR"}, "asset_class": {"stocks_bonds"},
 	})
 
 	page := get(t, srv, "/")
 	for _, want := range []string{
-		`<details class="account-editor"><summary><span>Brokerage</span><small>EUR · Stocks &amp; bonds</small></summary>`,
-		`aria-label="Currency for Brokerage"`, `<option value="EUR" selected>EUR</option>`,
-		`aria-label="Asset class for Brokerage"`, `<option value="stocks_bonds" selected>Stocks &amp; bonds</option>`,
+		`<details class="account-editor"><summary><span>Long-term Brokerage</span><small>EUR · Stocks &amp; bonds</small></summary>`,
+		`name="name" value="Long-term Brokerage"`, `aria-label="Currency for Long-term Brokerage"`,
+		`<option value="EUR" selected>EUR</option>`, `aria-label="Asset class for Long-term Brokerage"`,
+		`<option value="stocks_bonds" selected>Stocks &amp; bonds</option>`,
+		`action="/accounts/1/delete"`, `Delete account`,
 		">100.00</summary>", ">93.46</strong>",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("updated account missing %q", want)
 		}
+	}
+}
+
+func TestWorkspaceDeletesAccountAndItsBalances(t *testing.T) {
+	srv := newTestServer(t)
+	post(t, srv, "/accounts", url.Values{
+		"name": {"Savings"}, "currency": {"CHF"}, "kind": {"asset"},
+		"month": {"2026-08"}, "balance": {"1000.00"},
+	})
+	post(t, srv, "/accounts/1/delete", nil)
+
+	page := get(t, srv, "/")
+	if strings.Contains(page, "Savings") || strings.Contains(page, "1,000.00") {
+		t.Error("deleted account or its balance remains in Workspace")
 	}
 }
 
@@ -426,6 +442,7 @@ func TestWorkspaceSummarySeparatesLiquidityAndInvestedAssets(t *testing.T) {
 		{"Shares", "asset", "stocks", "200.00"},
 		{"Bonds", "asset", "bonds", "300.00"},
 		{"Mixed", "asset", "stocks_bonds", "400.00"},
+		{"Home", "asset", "real_estate", "800.00"},
 		{"Card", "liability", "cash", "50.00"},
 	}
 	for index, account := range accounts {
@@ -443,7 +460,8 @@ func TestWorkspaceSummarySeparatesLiquidityAndInvestedAssets(t *testing.T) {
 	page := get(t, srv, "/")
 	for _, want := range []string{
 		"Summary (CHF)", "Liquidity", ">100.00</strong>",
-		"Invested", ">900.00</strong>", "Net worth", ">950.00</strong>",
+		"Invested", ">900.00</strong>", "Illiquidity", ">800.00</strong>",
+		"Net worth", ">1,750.00</strong>",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("summary missing %q", want)

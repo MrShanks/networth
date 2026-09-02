@@ -34,17 +34,19 @@ const (
 	ClassStocks      = "stocks"
 	ClassBonds       = "bonds"
 	ClassStocksBonds = "stocks_bonds"
+	ClassRealEstate  = "real_estate"
 	ClassOther       = "other"
 )
 
 // AssetClasses lists every class, in display order.
-var AssetClasses = []string{ClassCash, ClassStocks, ClassBonds, ClassStocksBonds, ClassOther}
+var AssetClasses = []string{ClassCash, ClassStocks, ClassBonds, ClassStocksBonds, ClassRealEstate, ClassOther}
 
 var classLabels = map[string]string{
 	ClassCash:        "Cash",
 	ClassStocks:      "Stocks",
 	ClassBonds:       "Bonds",
 	ClassStocksBonds: "Stocks & bonds",
+	ClassRealEstate:  "Real estate",
 	ClassOther:       "Other",
 }
 
@@ -456,16 +458,22 @@ func (s *Store) SetAccountCurrency(ctx context.Context, id int64, currency strin
 	return nil
 }
 
-// SetAccountDetails updates the denomination and asset class together.
-func (s *Store) SetAccountDetails(ctx context.Context, id int64, currency, class string) error {
+// SetAccountDetails updates the account's editable metadata together.
+func (s *Store) SetAccountDetails(ctx context.Context, id int64, name, currency, class string) error {
+	name = strings.TrimSpace(name)
 	if err := checkCurrency(currency); err != nil {
 		return err
 	}
 	if err := checkClass(class); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE accounts SET currency = ?, asset_class = ? WHERE id = ?`, currency, class, id)
+	query := `UPDATE accounts SET currency = ?, asset_class = ? WHERE id = ?`
+	args := []any{currency, class, id}
+	if name != "" {
+		query = `UPDATE accounts SET name = ?, currency = ?, asset_class = ? WHERE id = ?`
+		args = []any{name, currency, class, id}
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

@@ -39,6 +39,7 @@ type workspaceData struct {
 	CurrentNetWorth money.Amount
 	Liquidity       money.Amount
 	Invested        money.Amount
+	Illiquidity     money.Amount
 	CurrentAsOf     string
 	Base            string
 	Year            int
@@ -67,7 +68,7 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	data := workspaceData{
 		Currencies:   store.Currencies,
-		AssetClasses: []string{store.ClassCash, store.ClassStocks, store.ClassBonds, store.ClassStocksBonds},
+		AssetClasses: []string{store.ClassCash, store.ClassStocks, store.ClassBonds, store.ClassStocksBonds, store.ClassRealEstate},
 		Month:        completedMonth.Format("2006-01"),
 		Base:         store.Base,
 		Year:         year,
@@ -83,6 +84,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 			data.Liquidity += class.Total
 		case store.ClassStocks, store.ClassBonds, store.ClassStocksBonds:
 			data.Invested += class.Total
+		case store.ClassRealEstate:
+			data.Illiquidity += class.Total
 		}
 	}
 	data.CurrentAsOf = completedMonth.Format("January 2006")
@@ -171,11 +174,24 @@ func (s *Server) handleSetWorkspaceAccountDetails(w http.ResponseWriter, r *http
 		return
 	}
 	if err := s.store.SetAccountDetails(r.Context(), accountID,
-		r.FormValue("currency"), r.FormValue("asset_class")); err != nil {
+		r.FormValue("name"), r.FormValue("currency"), r.FormValue("asset_class")); err != nil {
 		s.redirectTo(w, r, "/", "could not update account: "+err.Error())
 		return
 	}
 	s.noticeTo(w, r, "/", "Account updated.")
+}
+
+func (s *Server) handleDeleteWorkspaceAccount(w http.ResponseWriter, r *http.Request) {
+	accountID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.redirectTo(w, r, "/", "invalid account")
+		return
+	}
+	if err := s.store.DeleteAccount(r.Context(), accountID); err != nil {
+		s.redirectTo(w, r, "/", "could not delete account: "+err.Error())
+		return
+	}
+	s.noticeTo(w, r, "/", "Account deleted.")
 }
 
 func (s *Server) handleSetWorkspaceBalance(w http.ResponseWriter, r *http.Request) {

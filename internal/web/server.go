@@ -90,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.handleWorkspace)
 	s.mux.HandleFunc("POST /accounts", s.handleCreateWorkspaceAccount)
 	s.mux.HandleFunc("POST /accounts/{id}", s.handleSetWorkspaceAccountDetails)
+	s.mux.HandleFunc("POST /accounts/{id}/delete", s.handleDeleteWorkspaceAccount)
 	s.mux.HandleFunc("POST /balances", s.handleSetWorkspaceBalance)
 	s.mux.HandleFunc("POST /accounts/{id}/balances", s.handleSetWorkspaceBalance)
 	s.mux.HandleFunc("POST /balances/import", s.handleImportWorkspaceBalances)

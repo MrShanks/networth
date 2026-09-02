@@ -109,7 +109,7 @@
 
   {{if .Accounts}}
   <section class="widget networth-summary" data-widget="current-net-worth" data-span="2" data-dynamic-title>
-    {{template "widgethint" (dict "Title" (printf "Summary (%s)" .Base) "Hint" "Net worth, cash liquidity, and invested assets at the end of the latest completed month.")}}
+    {{template "widgethint" (dict "Title" (printf "Summary (%s)" .Base) "Hint" "Net worth, liquidity, invested assets, and real estate at the end of the latest completed month.")}}
     <div class="widget-body">
       <div class="cards">
         <div class="card">
@@ -126,6 +126,11 @@
           <span class="label">Invested</span>
           <strong class="value">{{.Invested}}</strong>
           <span class="delta summary-detail">stocks and bonds</span>
+        </div>
+        <div class="card">
+          <span class="label">Illiquidity</span>
+          <strong class="value">{{.Illiquidity}}</strong>
+          <span class="delta summary-detail">real estate</span>
         </div>
       </div>
     </div>
@@ -149,7 +154,7 @@
       <table class="account-matrix">
         <thead><tr><th>Account</th>{{range .Months}}<th class="num">{{.Label}}</th>{{end}}</tr></thead>
         <tbody>
-          {{range .Accounts}}{{$account := .}}<tr><th scope="row"><details class="account-editor"><summary><span>{{.Name}}</span><small>{{.Currency}} · {{classLabel .AssetClass}}</small></summary><form method="post" action="/accounts/{{.ID}}" class="account-inline-form"><label><span class="sr-only">Currency for {{.Name}}</span><select name="currency" aria-label="Currency for {{.Name}}">{{range $.Currencies}}<option value="{{.}}"{{if eq . $account.Currency}} selected{{end}}>{{.}}</option>{{end}}</select></label><label><span class="sr-only">Asset class for {{.Name}}</span><select name="asset_class" aria-label="Asset class for {{.Name}}">{{range $.AssetClasses}}<option value="{{.}}"{{if eq . $account.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}</select></label><button type="submit" class="account-save">Save</button></form></details></th>{{range .Months}}<td class="num">{{if .Known}}<details class="balance-editor"><summary title="Edit balance">{{.Amount}}</summary><form method="post" action="/accounts/{{$account.ID}}/balances"><input type="hidden" name="month" value="{{.Month}}"><label><span class="sr-only">Balance for {{$account.Name}} in {{.Month}}</span><input name="balance" value="{{.Amount.Input}}" inputmode="decimal" aria-label="Balance for {{$account.Name}} in {{.Month}}" required></label><button type="submit">Save</button></form></details>{{else}}<span class="empty">—</span>{{end}}</td>{{end}}</tr>{{end}}
+          {{range .Accounts}}{{$account := .}}<tr><th scope="row"><details class="account-editor"><summary><span>{{.Name}}</span><small>{{.Currency}} · {{classLabel .AssetClass}}</small></summary><form method="post" action="/accounts/{{.ID}}" class="account-inline-form"><label class="account-name-field"><span class="sr-only">Name for {{.Name}}</span><input name="name" value="{{.Name}}" aria-label="Name for {{.Name}}" required maxlength="80"></label><label><span class="sr-only">Currency for {{.Name}}</span><select name="currency" aria-label="Currency for {{.Name}}">{{range $.Currencies}}<option value="{{.}}"{{if eq . $account.Currency}} selected{{end}}>{{.}}</option>{{end}}</select></label><label><span class="sr-only">Asset class for {{.Name}}</span><select name="asset_class" aria-label="Asset class for {{.Name}}">{{range $.AssetClasses}}<option value="{{.}}"{{if eq . $account.AssetClass}} selected{{end}}>{{classLabel .}}</option>{{end}}</select></label><button type="submit" class="account-save">Save</button></form><form method="post" action="/accounts/{{.ID}}/delete" class="account-delete-form" onsubmit="return confirm('Permanently delete {{.Name}}, its balance history, and any linked investments?')"><button type="submit" class="danger">Delete account</button></form></details></th>{{range .Months}}<td class="num">{{if .Known}}<details class="balance-editor"><summary title="Edit balance">{{.Amount}}</summary><form method="post" action="/accounts/{{$account.ID}}/balances"><input type="hidden" name="month" value="{{.Month}}"><label><span class="sr-only">Balance for {{$account.Name}} in {{.Month}}</span><input name="balance" value="{{.Amount.Input}}" inputmode="decimal" aria-label="Balance for {{$account.Name}} in {{.Month}}" required></label><button type="submit">Save</button></form></details>{{else}}<span class="empty">—</span>{{end}}</td>{{end}}</tr>{{end}}
         </tbody>
         <tfoot><tr><th>Net worth ({{.Base}})</th>{{range .Totals}}<td class="num">{{.}}</td>{{end}}</tr></tfoot>
       </table>
